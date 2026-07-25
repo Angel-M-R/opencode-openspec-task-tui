@@ -1,6 +1,6 @@
 {
   "name": "opencode-openspec-task-tui",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "OpenCode TUI sidebar for active OpenSpec task progress",
   "repository": {
     "type": "git",

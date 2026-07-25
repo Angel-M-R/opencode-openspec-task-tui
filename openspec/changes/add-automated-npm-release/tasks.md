@@ -18,9 +18,9 @@ The groups are strictly ordered: each group must be complete before the next sta
 
 ## 2. First-version bootstrap in the repo
 
-- [ ] 2.1 **[impl]** Set `version` in `package.json` to `1.0.0` (temporary — group 5 replaces it with the sentinel). Commit as `chore(release): prepare 1.0.0 bootstrap`.
-- [ ] 2.2 **[impl]** Re-run `pnpm pack --dry-run` and confirm the generated tarball name reflects `1.0.0` and the `prepack` build succeeded.
-- [ ] 2.3 **[impl]** Confirm the package name `opencode-openspec-task-tui` is still unclaimed on npm (e.g. `npm view opencode-openspec-task-tui` should report a 404) and report to the maintainer if it is taken — the bootstrap cannot proceed under a taken name.
+- [x] 2.1 **[impl]** Set `version` in `package.json` to `1.0.0` (temporary — group 5 replaces it with the sentinel). Commit as `chore(release): prepare 1.0.0 bootstrap`.
+- [x] 2.2 **[impl]** Re-run `pnpm pack --dry-run` and confirm the generated tarball name reflects `1.0.0` and the `prepack` build succeeded.
+- [x] 2.3 **[impl]** Confirm the package name `opencode-openspec-task-tui` is still unclaimed on npm (e.g. `npm view opencode-openspec-task-tui` should report a 404) and report to the maintainer if it is taken — the bootstrap cannot proceed under a taken name.
 - [ ] 2.4 **[impl]** Push the `1.0.0` bootstrap commit to canonical `main` and verify a clean checkout from `git@github.com:Angel-M-R/opencode-openspec-task-tui.git` resolves to that commit before handing off the manual publish.
 
 ## 3. Manual first publish (maintainer only)
