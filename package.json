@@ -1,0 +1,53 @@
+{
+  "name": "opencode-openspec-task-tui",
+  "version": "0.1.0",
+  "description": "OpenCode TUI sidebar for active OpenSpec task progress",
+  "type": "module",
+  "packageManager": "pnpm@10.8.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "main": "./dist/tui.js",
+  "types": "./dist/tui.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/tui.d.ts",
+      "import": "./dist/tui.js"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "import": "./dist/tui.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "tsup",
+    "prepack": "pnpm run build",
+    "pack:dry-run": "npm pack --dry-run",
+    "test": "pnpm run test:unit && pnpm run test:integration",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.50 <2",
+    "@opentui/core": ">=0.4.0 <0.5",
+    "@opentui/solid": ">=0.4.0 <0.5",
+    "solid-js": ">=1.9.12 <2"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.4",
+    "@opentui/core": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "@types/node": "22.19.19",
+    "esbuild-plugin-solid": "0.6.0",
+    "solid-js": "1.9.12",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.7"
+  }
+}
