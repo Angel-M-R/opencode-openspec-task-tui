@@ -3,7 +3,7 @@ Each task is tagged with who performs it:
 - **[impl]** — an implementer working inside this repository.
 - **[user]** — the maintainer, acting manually outside the repository (npm website, `npm login`, interactive publish, pushing a tag). These cannot be automated and must not be attempted by an agent.
 
-The groups are strictly ordered: each group must be complete before the next starts. Sections 1–3 are completed and remain unchanged. The remaining sequence is: merge CI plus a dormant release workflow, configure npm trust, then activate the workflow in the first real OIDC release pull request. npm Trusted Publisher configuration must not begin until dormant `release.yml` exists on canonical `main`; that workflow must not run or be manually dispatched before trust is configured.
+The groups are strictly ordered: each group must be complete before the next starts. Sections 1–5 are completed and remain unchanged. The remaining sequence is: preflight the dormant workflow after trust configuration, finalize and merge the first real OIDC release pull request, obtain the maintainer's npm publication and provenance confirmation, then verify the repository-side release artifacts and sentinel version. npm Trusted Publisher configuration must not begin until dormant `release.yml` exists on canonical `main`; that workflow must not run or be manually dispatched before trust is configured.
 
 ## 1. Publishable package metadata
 
@@ -41,21 +41,33 @@ The groups are strictly ordered: each group must be complete before the next sta
 - [x] 4.7 **[impl]** Add devDependencies `@commitlint/cli`, `@commitlint/config-conventional`, and `husky`; add a `prepare: husky` script; run `pnpm install` if needed to keep `pnpm-lock.yaml` synchronized.
 - [x] 4.8 **[impl]** Create `commitlint.config.js` extending `@commitlint/config-conventional`, and a husky `commit-msg` hook that runs commitlint on `$1`. Make the hook file executable.
 - [x] 4.9 **[impl]** Run focused configuration checks: pass one valid message and one invalid message directly to commitlint, confirm the hook invokes commitlint with its message-file argument, inspect both workflow definitions for the specified triggers/permissions/steps, explicitly confirm `release.yml` has only `workflow_dispatch` and no `push` trigger, and confirm `package.json` and `pnpm-lock.yaml` agree. Do not include or alter the preserved README correction, and do not run or dispatch `release.yml`.
-- [ ] 4.10 **[impl]** Stage only the release-automation changes, commit them with a non-releasing conventional message such as `ci: add semantic-release publishing and CI workflows`, push a branch, and open a pull request so the new `ci.yml` validates the setup before it reaches `main`.
-- [ ] 4.11 **[impl]** Wait for the pull request CI to finish and confirm typecheck, tests, packaged-artifact inspection, and production audit all pass on Node 22.13 before merging.
-- [ ] 4.12 **[impl]** Merge the automation pull request to `main`; confirm CI was green for the pull request and canonical `main` now contains the fully defined `.github/workflows/release.yml` with only its dormant `workflow_dispatch` trigger. Confirm the merge did not start a release run, and do not manually dispatch it before npm Trusted Publisher is configured.
+- [x] 4.10 **[impl]** Stage only the release-automation changes, commit them with a non-releasing conventional message such as `ci: add semantic-release publishing and CI workflows`, push a branch, and open a pull request so the new `ci.yml` validates the setup before it reaches `main`.
+- [x] 4.11 **[impl]** Wait for the pull request CI to finish and confirm typecheck, tests, packaged-artifact inspection, and production audit all pass on Node 22.13 before merging.
+- [x] 4.12 **[impl]** Merge the automation pull request to `main`; confirm CI was green for the pull request and canonical `main` now contains the fully defined `.github/workflows/release.yml` with only its dormant `workflow_dispatch` trigger. Confirm the merge did not start a release run, and do not manually dispatch it before npm Trusted Publisher is configured.
 
 ## 5. Configure npm Trusted Publishing (maintainer only)
 
-- [ ] 5.1 **[user]** After task 4.12 confirms dormant `release.yml` exists on canonical `main`, open the published package's Settings → Trusted Publisher on npmjs.com and add a GitHub Actions publisher with organization/user `Angel-M-R`, repository `opencode-openspec-task-tui`, and workflow filename `release.yml`.
-- [ ] 5.2 **[user]** Confirm no `NPM_TOKEN` (or equivalent npm authentication secret) exists in the GitHub repository or organization settings; if one exists, delete it.
-- [ ] 5.3 **[user]** Confirm to the implementer that the trusted publisher is saved and the token check is complete, so the first real OIDC release may proceed.
+- [x] 5.1 **[user]** After task 4.12 confirms dormant `release.yml` exists on canonical `main`, open the published package's Settings → Trusted Publisher on npmjs.com and add a GitHub Actions publisher with organization/user `Angel-M-R`, repository `opencode-openspec-task-tui`, and workflow filename `release.yml`.
+- [x] 5.2 **[user]** Confirm no `NPM_TOKEN` (or equivalent npm authentication secret) exists in the GitHub repository or organization settings; if one exists, delete it.
+- [x] 5.3 **[user]** Confirm to the implementer that the trusted publisher is saved and the token check is complete, so the first real OIDC release may proceed.
 
-## 6. Publish the prepared README correction as 1.0.1
+## 6. Preflight dormant release automation after trust configuration
 
-- [ ] 6.1 **[impl]** Continue from the preserved, currently uncommitted `README.md` correction. Ensure it documents project-level active-change selection via `openspec list --json`: exclude changes with no tasks, validate candidate status, prefer in-progress over complete, choose the greatest `lastModified`, and read progress from `tasks.md`. Use the canonical project path, remove the stale session instructions, and remove the broken archived-change link.
-- [ ] 6.2 **[impl]** Before committing, add concise release-process documentation to `README.md`: Conventional Commits determine release type, a release-worthy merge to `main` publishes automatically, and git tags plus the npm registry—not the sentinel in `package.json`—are the released-version source of truth.
-- [ ] 6.3 **[impl]** In the same pull request as the README correction, change `release.yml` from its dormant `workflow_dispatch` trigger to the final `push` on `main` trigger. Review the final diff for only the intended README corrections, release documentation, and workflow activation; commit with an accurate patch-releasing message such as `fix(readme): correct active change selection guidance`, then push and open or update the pull request as appropriate.
-- [ ] 6.4 **[impl]** Wait for green pull-request CI, merge the README correction and workflow activation to `main`, and confirm that the merge's `fix:` commit triggers the newly activated release workflow and reports a successful npm publish of `1.0.1` through OIDC.
-- [ ] 6.5 **[user]** On npmjs.com, confirm version `1.0.1` is publicly accessible and shows a provenance attestation.
-- [ ] 6.6 **[impl]** Confirm tag `v1.0.1` and its GitHub Release with generated notes exist, and confirm `package.json` on canonical `main` still reads `0.0.0-development`.
+- [x] 6.1 **[impl]** Manually dispatch the dormant `.github/workflows/release.yml` on canonical `main` and wait for the run to complete. Do not edit the preserved, currently uncommitted `README.md` or activate the workflow's `push` trigger before this preflight succeeds.
+- [x] 6.2 **[impl]** Require the preflight run to complete typecheck, tests, `pnpm run pack:dry-run`, and `pnpm audit --prod --audit-level moderate` successfully, and require npm OIDC token exchange plus semantic-release `verifyConditions` to succeed.
+- [x] 6.3 **[impl]** Confirm semantic-release reports no relevant release and that the preflight creates no npm version, git tag, or GitHub Release. Stop rollout on any failure, unexpected release result, or created output; investigate without attempting repair by deleting an npm version, git tag, or GitHub Release.
+
+## 7. Finalize and publish the prepared README correction as 1.0.1
+
+- [x] 7.1 **[impl]** Continue from the preserved, currently uncommitted `README.md` correction. Ensure it documents project-level active-change selection via `openspec list --json`: exclude changes with no tasks, validate candidate status, prefer in-progress over complete, choose the greatest `lastModified`, and read progress from `tasks.md`. Use the canonical project path, remove the stale session instructions, and remove the broken archived-change link.
+- [x] 7.2 **[impl]** Before committing, add concise release-process documentation to `README.md`: Conventional Commits determine release type, a release-worthy merge to `main` publishes automatically, and git tags plus the npm registry—not the sentinel in `package.json`—are the released-version source of truth.
+- [x] 7.3 **[impl]** In the same pull request as the README correction, change `release.yml` from its dormant `workflow_dispatch` trigger to the final `push` on `main` trigger. Review the final diff for only the intended README corrections, release documentation, and workflow activation; commit with an accurate patch-releasing message such as `fix(readme): correct active change selection guidance`, then push and open or update the pull request as appropriate.
+- [x] 7.4 **[impl]** Wait for green pull-request CI, merge the README correction and workflow activation to `main`, and confirm that the merge's `fix:` commit triggers the newly activated release workflow and reports a successful npm publish of `1.0.1` through OIDC.
+
+## 8. Confirm the public npm release (maintainer only)
+
+- [x] 8.1 **[user]** On npmjs.com, confirm version `1.0.1` is publicly accessible and shows a provenance attestation.
+
+## 9. Verify repository release outputs
+
+- [x] 9.1 **[impl]** Confirm tag `v1.0.1` and its GitHub Release with generated notes exist, and confirm `package.json` on canonical `main` still reads `0.0.0-development`.

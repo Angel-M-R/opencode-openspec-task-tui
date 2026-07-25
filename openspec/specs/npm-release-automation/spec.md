@@ -1,4 +1,10 @@
-## ADDED Requirements
+# npm Release Automation Specification
+
+## Purpose
+
+Define bootstrap, trust establishment, activation, and steady-state behavior for automated npm releases.
+
+## Requirements
 
 ### Requirement: Release runs on push to main
 After Trusted Publisher configuration and workflow activation, the repository SHALL provide a GitHub Actions release workflow that is triggered exclusively by `push` events on the `main` branch. Git tags and GitHub Releases SHALL NOT be used as triggers, because they are produced by the workflow itself. The workflow SHALL serialize concurrent runs so that two pushes cannot publish simultaneously. This is the final steady state; the pre-configuration bootstrap state is governed separately by the dormant-workflow requirement.
@@ -52,8 +58,25 @@ The automation bootstrap SHALL add a fully defined `.github/workflows/release.ym
 
 #### Scenario: Workflow activation after trust configuration
 - **WHEN** npm Trusted Publisher configuration is confirmed complete
+- **AND** the post-trust dormant-workflow preflight has completed successfully
 - **THEN** the README fix pull request replaces the dormant `workflow_dispatch` trigger with `push` on `main`
 - **AND** the release workflow becomes active only when that pull request is merged
+
+### Requirement: Post-trust preflight gates workflow activation
+After npm Trusted Publisher is configured and the absence of `NPM_TOKEN` or equivalent authentication secrets is confirmed, the dormant `release.yml` SHALL be manually dispatched on canonical `main` before README work or push-trigger activation proceeds. The preflight SHALL stop rollout on any failure and SHALL NOT use deletion of npm versions, git tags, or GitHub Releases as a repair tactic.
+
+#### Scenario: Dormant workflow preflight succeeds without a release
+- **WHEN** the dormant workflow is manually dispatched on canonical `main` after trust configuration
+- **AND** only non-releasing `ci:` setup work exists since `v1.0.0`
+- **THEN** typecheck, tests, `pnpm run pack:dry-run`, and `pnpm audit --prod --audit-level moderate` all pass
+- **AND** npm OIDC token exchange and semantic-release `verifyConditions` succeed before commit analysis
+- **AND** semantic-release reports no relevant release
+- **AND** no npm version, git tag, or GitHub Release is created
+
+#### Scenario: Dormant workflow preflight fails
+- **WHEN** any verification or OIDC condition fails, semantic-release does not report the expected no-release result, or any release output is unexpectedly created
+- **THEN** rollout stops before README work and push-trigger activation
+- **AND** maintainers do not attempt recovery by deleting an npm version, git tag, or GitHub Release
 
 ### Requirement: package.json version is a sentinel
 The committed `package.json` SHALL carry the version `0.0.0-development`. The release process SHALL NOT commit a version back to the repository; git tags and the npm registry SHALL be the sole source of truth for released versions.
@@ -93,7 +116,8 @@ Publishing SHALL authenticate to npm via npm Trusted Publishing (OIDC). No npm a
 - **THEN** npm Trusted Publisher configuration remains blocked
 
 #### Scenario: First trusted patch release
-- **WHEN** Trusted Publisher configuration is complete and the pull request containing both the prepared README correction and the `push`-to-`main` workflow activation lands on `main` with an accurate `fix:` Conventional Commit
+- **WHEN** Trusted Publisher configuration and the no-release dormant-workflow preflight are complete
+- **AND** the pull request containing both the prepared README correction and the `push`-to-`main` workflow activation lands on `main` with an accurate `fix:` Conventional Commit
 - **THEN** the release workflow authenticates with OIDC and publishes `1.0.1` with provenance
 - **AND** no npm authentication token is used
 
