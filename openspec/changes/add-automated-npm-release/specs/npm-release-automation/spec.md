@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Release runs on push to main
-The repository SHALL provide a GitHub Actions release workflow that is triggered exclusively by `push` events on the `main` branch. Git tags and GitHub Releases SHALL NOT be used as triggers, because they are produced by the workflow itself. The workflow SHALL serialize concurrent runs so that two pushes cannot publish simultaneously.
+After Trusted Publisher configuration and workflow activation, the repository SHALL provide a GitHub Actions release workflow that is triggered exclusively by `push` events on the `main` branch. Git tags and GitHub Releases SHALL NOT be used as triggers, because they are produced by the workflow itself. The workflow SHALL serialize concurrent runs so that two pushes cannot publish simultaneously. This is the final steady state; the pre-configuration bootstrap state is governed separately by the dormant-workflow requirement.
 
 #### Scenario: Commit merged to main
 - **WHEN** a commit is pushed to `main`
@@ -31,8 +31,29 @@ The release workflow SHALL determine the next version solely from the Convention
 - **THEN** a major version is published
 
 #### Scenario: No release-worthy commits
-- **WHEN** the commits since the last release contain only non-releasing types such as `chore:`, `docs:`, or `test:`
+- **WHEN** the activated release workflow runs after Trusted Publisher configuration and the commits since the last release contain only non-releasing types such as `chore:`, `docs:`, or `test:`
 - **THEN** the workflow completes successfully without publishing and without creating a tag
+
+### Requirement: Bootstrap release workflow remains dormant until npm trust exists
+The automation bootstrap SHALL add a fully defined `.github/workflows/release.yml` whose only trigger is `workflow_dispatch`. The workflow SHALL NOT be run or manually dispatched before the package's npm Trusted Publisher is configured. The bootstrap merge SHALL prove the CI workflow is green and that dormant `release.yml` exists on canonical `main`; it SHALL NOT claim or require successful pre-authentication release execution.
+
+#### Scenario: Automation setup reaches canonical main
+- **WHEN** the automation pull request is merged with a non-releasing `ci:` setup commit after green pull-request CI
+- **THEN** fully defined `release.yml` exists under `.github/workflows/` on canonical `main` with only the `workflow_dispatch` trigger
+- **AND** no release workflow run is started by the merge
+
+#### Scenario: Dormant workflow before Trusted Publisher configuration
+- **WHEN** `release.yml` exists on canonical `main` but npm Trusted Publisher is not yet configured
+- **THEN** maintainers do not run or manually dispatch the workflow
+
+#### Scenario: Pre-authentication execution is unsafe
+- **WHEN** semantic-release would run before npm Trusted Publisher configuration with no `NPM_TOKEN` available
+- **THEN** the workflow remains dormant because `@semantic-release/npm` authentication occurs during `verifyConditions` before `analyzeCommits` can classify a commit as non-releasing
+
+#### Scenario: Workflow activation after trust configuration
+- **WHEN** npm Trusted Publisher configuration is confirmed complete
+- **THEN** the README fix pull request replaces the dormant `workflow_dispatch` trigger with `push` on `main`
+- **AND** the release workflow becomes active only when that pull request is merged
 
 ### Requirement: package.json version is a sentinel
 The committed `package.json` SHALL carry the version `0.0.0-development`. The release process SHALL NOT commit a version back to the repository; git tags and the npm registry SHALL be the sole source of truth for released versions.
@@ -62,8 +83,19 @@ Publishing SHALL authenticate to npm via npm Trusted Publishing (OIDC). No npm a
 - **THEN** the only token referenced is the built-in `GITHUB_TOKEN`
 
 #### Scenario: Trusted Publisher repository identity
-- **WHEN** the maintainer configures npm Trusted Publishing after the bootstrap publish
+- **WHEN** the `1.0.0` bootstrap is published and tagged, dormant `release.yml` exists on canonical `main`, and pull-request CI has succeeded
+- **AND** the maintainer configures npm Trusted Publishing
 - **THEN** the publisher uses organization/user `Angel-M-R`, repository `opencode-openspec-task-tui`, and workflow filename `release.yml`
+- **AND** no `NPM_TOKEN` or equivalent npm authentication secret exists
+
+#### Scenario: Referenced workflow is still absent
+- **WHEN** `release.yml` does not yet exist under `.github/workflows/` on canonical `main`
+- **THEN** npm Trusted Publisher configuration remains blocked
+
+#### Scenario: First trusted patch release
+- **WHEN** Trusted Publisher configuration is complete and the pull request containing both the prepared README correction and the `push`-to-`main` workflow activation lands on `main` with an accurate `fix:` Conventional Commit
+- **THEN** the release workflow authenticates with OIDC and publishes `1.0.1` with provenance
+- **AND** no npm authentication token is used
 
 ### Requirement: Package metadata supports publishing
 `package.json` SHALL declare the metadata required for a public, OIDC-published package: `repository.url` equal to `https://github.com/Angel-M-R/opencode-openspec-task-tui`, `homepage` pointing to that repository's README, `bugs.url` equal to `https://github.com/Angel-M-R/opencode-openspec-task-tui/issues`, `keywords`, `license`, and `publishConfig.access: public`. The repository SHALL contain a MIT `LICENSE` file. The declared repository URL SHALL match the canonical GitHub repository that runs the release workflow exactly.
@@ -108,3 +140,10 @@ Each published version SHALL be accompanied by a GitHub Release containing gener
 #### Scenario: Successful publish
 - **WHEN** version `X.Y.Z` is published to npm
 - **THEN** a GitHub Release for tag `vX.Y.Z` exists with notes grouped by commit type
+
+### Requirement: Release operation is documented
+The README SHALL document that commit messages follow Conventional Commits, release-worthy merges to `main` publish automatically, and released versions are read from git tags and the npm registry while committed `package.json` retains `0.0.0-development`.
+
+#### Scenario: Contributor checks how releases work
+- **WHEN** a contributor reads the release-process documentation
+- **THEN** they can determine how commit type affects publishing and where to find the current released version

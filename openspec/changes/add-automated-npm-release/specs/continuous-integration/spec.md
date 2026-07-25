@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: CI validates pull requests and pushes
-The repository SHALL provide a GitHub Actions CI workflow triggered on pull requests and on pushes. The workflow SHALL run typecheck, the test suite, a packaged-artifact inspection (`pnpm pack --dry-run`), and a production dependency audit (`pnpm audit --prod --audit-level moderate`).
+The repository SHALL provide a GitHub Actions CI workflow triggered on pull requests and on pushes. The workflow SHALL run typecheck, the test suite, a packaged-artifact inspection (`pnpm run pack:dry-run`), and a production dependency audit (`pnpm audit --prod --audit-level moderate`).
 
 #### Scenario: Pull request opened
 - **WHEN** a pull request is opened or updated
@@ -14,6 +14,11 @@ The repository SHALL provide a GitHub Actions CI workflow triggered on pull requ
 #### Scenario: A check fails
 - **WHEN** any validation step fails
 - **THEN** the workflow fails and reports which step failed
+
+#### Scenario: Automation introduced through a pull request
+- **WHEN** the pull request that adds `ci.yml` and the fully defined but dormant `release.yml` is opened or updated
+- **THEN** the newly added CI workflow runs all required validation steps and must pass before the automation is merged to `main`
+- **AND** the release workflow is not run or dispatched before npm Trusted Publisher configuration
 
 ### Requirement: CI never publishes
 The CI workflow SHALL NOT publish to any registry, create tags, or create releases. It SHALL request only read permissions on repository contents and SHALL NOT request an OIDC token.
