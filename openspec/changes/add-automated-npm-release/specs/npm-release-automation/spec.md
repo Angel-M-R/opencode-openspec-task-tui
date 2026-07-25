@@ -47,7 +47,7 @@ The committed `package.json` SHALL carry the version `0.0.0-development`. The re
 - **THEN** the sentinel value signals that the version must be read from git tags or the registry instead
 
 ### Requirement: npm authentication uses trusted publishing
-Publishing SHALL authenticate to npm via npm Trusted Publishing (OIDC). No npm authentication token SHALL be stored as a GitHub secret or referenced by any workflow. The release job SHALL request the `id-token: write` permission, run on a GitHub-hosted runner, and use a Node.js and npm CLI version that support trusted publishing (Node.js >= 22.14.0, npm >= 11.5.1).
+Publishing SHALL authenticate to npm via npm Trusted Publishing (OIDC). No npm authentication token SHALL be stored as a GitHub secret or referenced by any workflow. The release job SHALL request the `id-token: write` permission, run on a GitHub-hosted runner, and use a Node.js and npm CLI version that support trusted publishing (Node.js >= 22.14.0, npm >= 11.5.1). The package's Trusted Publisher SHALL identify organization/user `Angel-M-R`, repository `opencode-openspec-task-tui`, and workflow filename `release.yml`.
 
 #### Scenario: Publish from CI
 - **WHEN** the release workflow publishes to npm
@@ -61,8 +61,12 @@ Publishing SHALL authenticate to npm via npm Trusted Publishing (OIDC). No npm a
 - **WHEN** the workflow files are inspected for credentials
 - **THEN** the only token referenced is the built-in `GITHUB_TOKEN`
 
+#### Scenario: Trusted Publisher repository identity
+- **WHEN** the maintainer configures npm Trusted Publishing after the bootstrap publish
+- **THEN** the publisher uses organization/user `Angel-M-R`, repository `opencode-openspec-task-tui`, and workflow filename `release.yml`
+
 ### Requirement: Package metadata supports publishing
-`package.json` SHALL declare the metadata required for a public, OIDC-published package: `repository.url` pointing at `github.com/Angel-M-R/openspec-opencode-status-line`, `homepage`, `bugs`, `keywords`, `license`, and `publishConfig.access: public`. The repository SHALL contain a MIT `LICENSE` file. The declared repository URL SHALL match the GitHub repository that runs the release workflow exactly.
+`package.json` SHALL declare the metadata required for a public, OIDC-published package: `repository.url` equal to `https://github.com/Angel-M-R/opencode-openspec-task-tui`, `homepage` pointing to that repository's README, `bugs.url` equal to `https://github.com/Angel-M-R/opencode-openspec-task-tui/issues`, `keywords`, `license`, and `publishConfig.access: public`. The repository SHALL contain a MIT `LICENSE` file. The declared repository URL SHALL match the canonical GitHub repository that runs the release workflow exactly.
 
 #### Scenario: Repository URL mismatch
 - **WHEN** `repository.url` does not resolve to the repository executing the release workflow
@@ -75,6 +79,17 @@ Publishing SHALL authenticate to npm via npm Trusted Publishing (OIDC). No npm a
 #### Scenario: License present
 - **WHEN** the published tarball is inspected
 - **THEN** it declares the MIT license and the repository contains a matching `LICENSE` file
+
+### Requirement: Canonical repository is established before bootstrap
+Before preparing or publishing the manual `1.0.0` bootstrap release, the local Git `origin` fetch and push URLs SHALL both be `git@github.com:Angel-M-R/opencode-openspec-task-tui.git`. The canonical repository metadata corrections SHALL be verified, committed, and pushed to `main` before bootstrap work proceeds.
+
+#### Scenario: Forwarding origin still configured
+- **WHEN** `git remote -v` reports the old forwarding slug for either fetch or push
+- **THEN** bootstrap preparation and publishing remain blocked
+
+#### Scenario: Canonical repository correction complete
+- **WHEN** both `origin` URLs use the canonical SSH URL and the canonical metadata has been verified, committed, and pushed to `main`
+- **THEN** preparation of the manual `1.0.0` bootstrap release may begin
 
 ### Requirement: Released artifact is verified before publish
 The release workflow SHALL verify the package before publishing by running typecheck, the test suite, a production dependency audit, and a packaging dry run. A failure in any verification step SHALL abort the release without publishing.

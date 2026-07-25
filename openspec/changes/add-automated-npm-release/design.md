@@ -1,6 +1,6 @@
 ## Context
 
-The repository (`Angel-M-R/openspec-opencode-status-line`, local directory `openspec-opencode-statusline`) holds the package `opencode-openspec-task-tui` at version `0.1.0`. It has a working build (`tsup`), typecheck, unit and integration tests, and a `prepack` hook that builds before packing — but no CI, no release automation, no `LICENSE`, no `repository` field, and it has never been published. `main` is the only branch and currently has a single commit that already follows Conventional Commits.
+GitHub reports that the repository moved and now has the canonical identity `Angel-M-R/opencode-openspec-task-tui` (`https://github.com/Angel-M-R/opencode-openspec-task-tui`). The local directory remains `openspec-opencode-statusline`, and the existing SSH `origin` still uses GitHub's non-canonical forwarding URL. The repository holds the package `opencode-openspec-task-tui`; its publish metadata still uses the non-canonical identity and must be corrected before bootstrap publishing. It has a working build (`tsup`), typecheck, unit and integration tests, and a `prepack` hook, but no CI or release automation and it has never been published.
 
 A sibling project (`references/sub-agent-statusline`, gitignored, its own git repo) already runs semantic-release with the same four plugins and a very similar `ci.yml` / `release.yml` pair. It is a useful style reference, but it authenticates with a stored `NPM_TOKEN`; this design deliberately diverges to OIDC trusted publishing so no npm credential ever exists in GitHub.
 
@@ -26,7 +26,7 @@ Facts this design relies on (already verified; do not re-research):
 - No `CHANGELOG.md` file committed to the repository — release notes live in the GitHub Release.
 - No changes to product code, build configuration, tests, or runtime `peerDependencies`.
 - No multi-Node test matrix, no coverage thresholds, no publishing of the `dist/` build as a GitHub artifact.
-- No renaming of the npm package or the repository.
+- No renaming of the npm package and no further repository rename; this change only reconciles release setup with GitHub's already-completed move to the canonical slug.
 
 ## Decisions
 
@@ -79,14 +79,21 @@ A `release` block in `package.json` (matching the reference project's shape) wit
 - Accepted gap: a maintainer committing via the GitHub web UI, or with `--no-verify`, bypasses the hook. The consequence is a mis-versioned or non-releasing commit, not a broken publish.
 
 ### Package metadata as a release-blocking requirement
-`repository.url` must be exactly the GitHub repo `github.com/Angel-M-R/openspec-opencode-status-line`. Note the trap: the local directory is `openspec-opencode-statusline` (no hyphen before "line") while the GitHub repository is `openspec-opencode-status-line` — the GitHub name is the correct one, and `git remote -v` confirms it. Also required: `LICENSE` (MIT), `homepage`, `bugs`, `keywords`, `publishConfig.access: public`.
+`repository.url` must be exactly `https://github.com/Angel-M-R/opencode-openspec-task-tui`, because npm Trusted Publishing validates it against the canonical repository that runs the workflow. `homepage` must use that repository's README URL, and `bugs.url` must use its issues URL. Also required: `LICENSE` (MIT), `keywords`, and `publishConfig.access: public`.
 
 - These are treated as hard requirements, not polish: OIDC validates the repository claim against this field.
+
+### Repository move reconciliation precedes bootstrap
+The existing SSH `origin` still names the old forwarding slug, so it is not sufficient evidence of the canonical identity. Before setting or publishing version `1.0.0`, update both the fetch and push URL for `origin` to `git@github.com:Angel-M-R/opencode-openspec-task-tui.git`, verify both entries with `git remote -v`, correct the repository/homepage/bugs metadata, re-run verification, and commit and push those corrections to canonical `main`.
+
+After the manual `1.0.0` publish creates the npm package, configure its Trusted Publisher with organization/user `Angel-M-R`, repository `opencode-openspec-task-tui`, and workflow filename `release.yml`.
+
+- *Alternative rejected — continue using GitHub's forwarding URL*: forwarding preserves Git transport temporarily but leaves local configuration and npm's exact repository identity tied to a non-canonical slug.
 
 ## Risks / Trade-offs
 
 - **npm publishes are effectively irreversible after 72 hours** → the bootstrap publish is preceded by `npm pack --dry-run` and a manual inspection of the tarball contents; `files: ["dist"]` and `prepack` are verified before the first publish. After the window, the only remedy is publishing a superseding version.
-- **A wrong `repository.url` breaks OIDC silently until the first CI publish** → set it from `git remote -v` rather than from the directory name, and treat the first automated release as a deliberate smoke test (a trivial `fix:` commit) rather than a real feature ship.
+- **A wrong `repository.url` breaks OIDC silently until the first CI publish** → use the canonical identity returned by GitHub, update both Git `origin` URLs to match it, verify the metadata before bootstrap, and treat the first automated release as a deliberate smoke test (a trivial `fix:` commit) rather than a real feature ship.
 - **No gate: any merge to `main` with `feat:`/`fix:` publishes** → accepted by decision. Mitigated by the release job re-running full verification before publishing, so a merge can only publish something that typechecks, tests clean, packs, and passes the production audit.
 - **Bootstrap ordering is fragile**: publishing `1.0.0` without tagging `v1.0.0` makes the first automated run attempt `1.0.0` again and fail on a registry conflict → the tag step is an explicit, non-optional task in the sequence.
 - **Node 24 in release vs 22.13 in CI** means the publish path runs on a runtime CI never exercises → the release job re-runs typecheck and tests on Node 24, so a Node-version-specific break surfaces there before publishing.

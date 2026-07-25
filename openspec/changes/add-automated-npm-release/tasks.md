@@ -3,23 +3,25 @@ Each task is tagged with who performs it:
 - **[impl]** — an implementer working inside this repository.
 - **[user]** — the maintainer, acting manually outside the repository (npm website, `npm login`, interactive publish, pushing a tag). These cannot be automated and must not be attempted by an agent.
 
-The groups are strictly ordered: group 3 cannot start before group 2 is merged, group 5 cannot start before group 4 is confirmed.
+The groups are strictly ordered: each group must be complete before the next starts. In particular, no `1.0.0` bootstrap preparation or publish may begin until group 1's canonical remote and metadata corrections are verified, committed, and pushed to `main`; group 3 cannot start before group 2 is pushed to canonical `main`; group 5 cannot start before group 4 is confirmed.
 
 ## 1. Publishable package metadata
 
-- [x] 1.1 **[impl]** Add `repository` to `package.json` as `{ "type": "git", "url": "https://github.com/Angel-M-R/openspec-opencode-status-line" }`. Confirm the exact slug with `git remote -v` first — the local directory name (`openspec-opencode-statusline`) is NOT the repository name (`openspec-opencode-status-line`).
-- [x] 1.2 **[impl]** Add `homepage` (repository README URL) and `bugs` (`{ "url": ".../issues" }`) to `package.json`.
-- [x] 1.3 **[impl]** Add a `keywords` array to `package.json` (e.g. `opencode`, `openspec`, `plugin`, `tui`, `statusline`, `tasks`).
-- [x] 1.4 **[impl]** Add `publishConfig: { "access": "public" }` to `package.json`.
-- [x] 1.5 **[impl]** Create a MIT `LICENSE` file at the repository root with the correct copyright holder and year; verify it matches the existing `license: "MIT"` field.
-- [x] 1.6 **[impl]** Add `README.md` to the `files` array if the published tarball should include it, then run `pnpm pack --dry-run` and inspect the listed contents (expect `dist/` output and nothing from `src/`, `test/`, `openspec/`, or `references/`).
-- [x] 1.7 **[impl]** Verify `pnpm typecheck` and `pnpm test` pass, then commit with a conventional message (e.g. `chore: add publishable package metadata and LICENSE`) and merge to `main`.
+- [x] 1.1 **[impl]** Set both Git `origin` URLs to the canonical repository: run `git remote set-url origin git@github.com:Angel-M-R/opencode-openspec-task-tui.git` and `git remote set-url --push origin git@github.com:Angel-M-R/opencode-openspec-task-tui.git`, then verify `git remote -v` shows that URL for both fetch and push.
+- [x] 1.2 **[impl]** Update `repository` in `package.json` to `{ "type": "git", "url": "https://github.com/Angel-M-R/opencode-openspec-task-tui" }`, exactly matching the canonical GitHub repository required by npm Trusted Publishing.
+- [x] 1.3 **[impl]** Update `homepage` to the canonical repository README URL and `bugs.url` to `https://github.com/Angel-M-R/opencode-openspec-task-tui/issues`.
+- [x] 1.4 **[impl]** Add a `keywords` array to `package.json` (e.g. `opencode`, `openspec`, `plugin`, `tui`, `statusline`, `tasks`).
+- [x] 1.5 **[impl]** Add `publishConfig: { "access": "public" }` to `package.json`.
+- [x] 1.6 **[impl]** Create a MIT `LICENSE` file at the repository root with the correct copyright holder and year; verify it matches the existing `license: "MIT"` field.
+- [x] 1.7 **[impl]** Add `README.md` to the `files` array if the published tarball should include it, then run `pnpm pack --dry-run` and inspect the listed contents (expect `dist/` output and nothing from `src/`, `test/`, `openspec/`, or `references/`).
+- [x] 1.8 **[impl]** Verify the canonical `repository`, `homepage`, and `bugs` values and both `origin` entries; re-run `pnpm typecheck` and `pnpm test`; then commit the corrections with a conventional message and push them to canonical `main`. Confirm the pushed commit is present before starting group 2.
 
 ## 2. First-version bootstrap in the repo
 
 - [ ] 2.1 **[impl]** Set `version` in `package.json` to `1.0.0` (temporary — group 5 replaces it with the sentinel). Commit as `chore(release): prepare 1.0.0 bootstrap`.
 - [ ] 2.2 **[impl]** Re-run `pnpm pack --dry-run` and confirm the generated tarball name reflects `1.0.0` and the `prepack` build succeeded.
 - [ ] 2.3 **[impl]** Confirm the package name `opencode-openspec-task-tui` is still unclaimed on npm (e.g. `npm view opencode-openspec-task-tui` should report a 404) and report to the maintainer if it is taken — the bootstrap cannot proceed under a taken name.
+- [ ] 2.4 **[impl]** Push the `1.0.0` bootstrap commit to canonical `main` and verify a clean checkout from `git@github.com:Angel-M-R/opencode-openspec-task-tui.git` resolves to that commit before handing off the manual publish.
 
 ## 3. Manual first publish (maintainer only)
 
@@ -30,7 +32,7 @@ The groups are strictly ordered: group 3 cannot start before group 2 is merged, 
 
 ## 4. Configure npm Trusted Publishing (maintainer only)
 
-- [ ] 4.1 **[user]** On npmjs.com, open the published package's Settings → Trusted Publisher and add a GitHub Actions publisher with organization/user `Angel-M-R`, repository `openspec-opencode-status-line`, and workflow filename `release.yml`.
+- [ ] 4.1 **[user]** On npmjs.com, open the published package's Settings → Trusted Publisher and add a GitHub Actions publisher with organization/user `Angel-M-R`, repository `opencode-openspec-task-tui`, and workflow filename `release.yml`.
 - [ ] 4.2 **[user]** Confirm no `NPM_TOKEN` (or equivalent) secret exists in the GitHub repository or organization settings; if one exists, delete it.
 - [ ] 4.3 **[user]** Confirm to the implementer that the trusted publisher is saved, so group 5 can proceed.
 
