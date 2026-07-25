@@ -1,6 +1,5 @@
 import type { KeyEvent, MouseEvent } from "@opentui/core";
 import type {
-  TuiHostSlotMap,
   TuiPlugin,
   TuiPluginApi,
   TuiPluginModule,
@@ -12,8 +11,11 @@ import {
   createAccordionPreferenceAdapter,
   type AccordionPreferenceAdapter,
 } from "./accordion-preferences.js";
-import type { SessionMessageLike } from "./change-reference.js";
 import type { PresentationState } from "./domain.js";
+import {
+  createOpenSpecListGateway,
+  type OpenSpecListGateway,
+} from "./openspec-list.js";
 import {
   createOpenSpecStatusGateway,
   type OpenSpecStatusGateway,
@@ -21,16 +23,14 @@ import {
 import {
   createRefreshCoordinator,
   type RefreshCoordinatorOptions,
-  type SessionEventLike,
   type WatchFactory,
 } from "./refresh-coordinator.js";
 
 export const TUI_PLUGIN_ID = "openspec-task-progress";
 export const SIDEBAR_SLOT_ORDER = 350;
 
-type SidebarContentProps = TuiHostSlotMap["sidebar_content"];
-
 export interface OpenSpecTaskTuiDependencies {
+  readonly listGateway?: OpenSpecListGateway;
   readonly statusGateway?: OpenSpecStatusGateway;
   readonly readTaskFile?: RefreshCoordinatorOptions["readTaskFile"];
   readonly watch?: WatchFactory;
@@ -45,13 +45,12 @@ export interface ProjectContext {
 
 interface SidebarProps {
   readonly api: TuiPluginApi;
-  readonly sessionID: string;
   readonly project: ProjectContext;
   readonly theme: TuiThemeCurrent;
   readonly dependencies: Required<
-    Pick<OpenSpecTaskTuiDependencies, "statusGateway">
+    Pick<OpenSpecTaskTuiDependencies, "listGateway" | "statusGateway">
   > &
-    Omit<OpenSpecTaskTuiDependencies, "statusGateway">;
+    Omit<OpenSpecTaskTuiDependencies, "listGateway" | "statusGateway">;
   readonly registerCleanup: (cleanup: () => void) => () => void;
 }
 
@@ -115,21 +114,6 @@ export function activateSectionFromMouse(
   return true;
 }
 
-export function resolveCurrentSessionID(
-  api: TuiPluginApi,
-  props?: Partial<SidebarContentProps>,
-): string | undefined {
-  if (typeof props?.session_id === "string" && props.session_id.length > 0) {
-    return props.session_id;
-  }
-
-  const route = api.route.current;
-  const routeSessionID = "params" in route ? route.params?.sessionID : undefined;
-  return route.name === "session" && typeof routeSessionID === "string"
-    ? routeSessionID
-    : undefined;
-}
-
 export function resolveProjectContext(api: TuiPluginApi): ProjectContext {
   const directory =
     nonEmptyString(api.state.path.directory) ??
@@ -146,6 +130,7 @@ export function createOpenSpecTaskTui(
 ): TuiPluginModule {
   const resolvedDependencies: SidebarProps["dependencies"] = {
     ...dependencies,
+    listGateway: dependencies.listGateway ?? createOpenSpecListGateway(),
     statusGateway:
       dependencies.statusGateway ?? createOpenSpecStatusGateway(),
   };
@@ -168,16 +153,10 @@ export function createOpenSpecTaskTui(
       api.slots.register({
         order: SIDEBAR_SLOT_ORDER,
         slots: {
-          sidebar_content(context, props) {
-            const sessionID = resolveCurrentSessionID(api, props);
-            if (!sessionID) {
-              return <EmptyState theme={context.theme.current} />;
-            }
-
+          sidebar_content(context, _props) {
             return (
               <OpenSpecSidebar
                 api={api}
-                sessionID={sessionID}
                 project={resolveProjectContext(api)}
                 theme={context.theme.current}
                 dependencies={resolvedDependencies}
@@ -201,12 +180,12 @@ export function createOpenSpecTaskTui(
 
 export function createSidebarRuntime(input: {
   readonly api: TuiPluginApi;
-  readonly sessionID: string;
   readonly project?: ProjectContext;
   readonly dependencies?: OpenSpecTaskTuiDependencies;
 }): SidebarRuntime {
   const project = input.project ?? resolveProjectContext(input.api);
   const dependencies = input.dependencies ?? {};
+  const listGateway = dependencies.listGateway ?? createOpenSpecListGateway();
   const statusGateway =
     dependencies.statusGateway ?? createOpenSpecStatusGateway();
   const listeners = new Set<(view: SidebarView) => void>();
@@ -219,16 +198,7 @@ export function createSidebarRuntime(input: {
 
   const coordinator = createRefreshCoordinator({
     projectDirectory: project.directory,
-    currentSessionID: input.sessionID,
-    getReferenceSource: () => ({
-      currentSessionID: input.sessionID,
-      messages: input.api.state.session.messages(
-        input.sessionID,
-      ) as readonly SessionMessageLike[],
-      partsForMessage: (messageID) => input.api.state.part(messageID),
-    }),
-    subscribeToSessionEvents: (listener) =>
-      subscribeToSessionEvents(input.api, listener),
+    listGateway,
     statusGateway,
     readTaskFile: dependencies.readTaskFile,
     watch: dependencies.watch,
@@ -300,7 +270,6 @@ export function createSidebarRuntime(input: {
 function OpenSpecSidebar(props: SidebarProps) {
   const runtime = createSidebarRuntime({
     api: props.api,
-    sessionID: props.sessionID,
     project: props.project,
     dependencies: props.dependencies,
   });
@@ -419,27 +388,6 @@ function CompactText(props: {
       {props.children}
     </text>
   );
-}
-
-function subscribeToSessionEvents(
-  api: TuiPluginApi,
-  listener: (event: SessionEventLike) => void,
-): () => void {
-  // The installed TUI bus exposes update/removal notifications, not the
-  // server-side created variants. New messages and parts arrive as updates.
-  const disposers = [
-    api.event.on("message.updated", listener),
-    api.event.on("message.removed", listener),
-    api.event.on("message.part.updated", listener),
-    api.event.on("message.part.removed", listener),
-  ];
-  let disposed = false;
-
-  return () => {
-    if (disposed) return;
-    disposed = true;
-    for (const dispose of disposers) dispose();
-  };
 }
 
 function nonEmptyString(value: unknown): string | undefined {

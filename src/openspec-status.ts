@@ -1,34 +1,12 @@
-import { execFile } from "node:child_process";
 import path from "node:path";
 
-import { isValidChangeName } from "./change-reference.js";
+import { isValidChangeName } from "./change-name.js";
 import type { ActiveChange } from "./domain.js";
-
-export const STATUS_TIMEOUT_MS = 5_000;
-export const STATUS_MAX_OUTPUT_BYTES = 256 * 1024;
-
-export interface ProcessRequest {
-  readonly command: string;
-  readonly args: readonly string[];
-  readonly cwd: string;
-  readonly timeoutMs: number;
-  readonly maxOutputBytes: number;
-}
-
-export type ProcessFailureKind = "timeout" | "output" | "exit" | "spawn";
-
-export interface ProcessExecutionResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly failure?: {
-    readonly kind: ProcessFailureKind;
-    readonly exitCode?: number;
-  };
-}
-
-export type ProcessExecutor = (
-  request: ProcessRequest,
-) => Promise<ProcessExecutionResult>;
+import {
+  runOpenSpecProcess,
+  type ProcessExecutionResult,
+  type ProcessExecutor,
+} from "./openspec-process.js";
 
 export interface OpenSpecStatusCommandGateway {
   run(
@@ -63,40 +41,15 @@ export interface OpenSpecStatusGateway {
 }
 
 export function createOpenSpecStatusCommandGateway(
-  executor: ProcessExecutor = executeFile,
+  executor?: ProcessExecutor,
 ): OpenSpecStatusCommandGateway {
   return {
-    async run(changeName, projectDirectory) {
-      let result: ProcessExecutionResult;
-      try {
-        result = await executor({
-          command: "openspec",
-          args: ["status", "--change", changeName, "--json"],
-          cwd: projectDirectory,
-          timeoutMs: STATUS_TIMEOUT_MS,
-          maxOutputBytes: STATUS_MAX_OUTPUT_BYTES,
-        });
-      } catch {
-        return {
-          stdout: "",
-          stderr: "",
-          failure: { kind: "spawn" },
-        };
-      }
-
-      if (
-        Buffer.byteLength(result.stdout, "utf8") > STATUS_MAX_OUTPUT_BYTES ||
-        Buffer.byteLength(result.stderr, "utf8") > STATUS_MAX_OUTPUT_BYTES
-      ) {
-        return {
-          stdout: "",
-          stderr: "",
-          failure: { kind: "output" },
-        };
-      }
-
-      return result;
-    },
+    run: (changeName, projectDirectory) =>
+      runOpenSpecProcess(
+        ["status", "--change", changeName, "--json"],
+        projectDirectory,
+        executor,
+      ),
   };
 }
 
@@ -124,46 +77,6 @@ export function createOpenSpecStatusGateway(
       return validateResolvedStatus(parsed.value, changeName);
     },
   };
-}
-
-const executeFile: ProcessExecutor = (request) =>
-  new Promise((resolve) => {
-    execFile(
-      request.command,
-      [...request.args],
-      {
-        cwd: request.cwd,
-        encoding: "utf8",
-        maxBuffer: request.maxOutputBytes,
-        timeout: request.timeoutMs,
-        windowsHide: true,
-      },
-      (error, stdout, stderr) => {
-        resolve({
-          stdout,
-          stderr,
-          ...(error ? { failure: processFailure(error) } : {}),
-        });
-      },
-    );
-  });
-
-function processFailure(error: Error): ProcessExecutionResult["failure"] {
-  const details = error as Error & {
-    readonly code?: string | number;
-    readonly killed?: boolean;
-  };
-
-  if (details.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-    return { kind: "output" };
-  }
-  if (details.code === "ETIMEDOUT" || details.killed) {
-    return { kind: "timeout" };
-  }
-  if (typeof details.code === "number") {
-    return { kind: "exit", exitCode: details.code };
-  }
-  return { kind: "spawn" };
 }
 
 function parseStatusOutput(
@@ -230,12 +143,33 @@ function validateResolvedStatus(
     return temporaryFailure("unsafe-path");
   }
 
+  const planningHome = value.planningHome;
+  if (
+    !isRecord(planningHome) ||
+    typeof planningHome.root !== "string" ||
+    typeof planningHome.changesDir !== "string"
+  ) {
+    return temporaryFailure("invalid-status");
+  }
+
+  const planningRoot = normalizeAbsolutePath(planningHome.root);
+  const changesDirectoryPath = normalizeAbsolutePath(planningHome.changesDir);
+  if (
+    !planningRoot ||
+    !changesDirectoryPath ||
+    !isStrictlyWithin(changesDirectoryPath, planningRoot) ||
+    !isStrictlyWithin(changeRoot, changesDirectoryPath)
+  ) {
+    return temporaryFailure("unsafe-path");
+  }
+
   return {
     status: "resolved",
     change: {
       name: requestedChange,
       rootPath: changeRoot,
       taskFilePath,
+      changesDirectoryPath,
     },
   };
 }

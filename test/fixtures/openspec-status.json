@@ -1,0 +1,13 @@
+{
+  "changeName": "fixture-active-change",
+  "planningHome": {
+    "root": "/workspace/openspec-opencode-statusline",
+    "changesDir": "/workspace/openspec-opencode-statusline/openspec/changes"
+  },
+  "changeRoot": "/workspace/openspec-opencode-statusline/openspec/changes/fixture-active-change",
+  "artifactPaths": {
+    "tasks": {
+      "resolvedOutputPath": "/workspace/openspec-opencode-statusline/openspec/changes/fixture-active-change/tasks.md"
+    }
+  }
+}

@@ -2,37 +2,18 @@ import { watch as watchFileSystem, type FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import {
-  extractNewestChangeReference,
-  type ChangeReferenceSource,
-} from "./change-reference.js";
 import type {
   ActiveChange,
   ActiveChangeSnapshot,
   PresentationState,
   TaskDocument,
 } from "./domain.js";
+import type { OpenSpecListGateway } from "./openspec-list.js";
 import type { OpenSpecStatusGateway } from "./openspec-status.js";
 import { parseTaskDocument } from "./task-parser.js";
 
 export const DEFAULT_REFRESH_DEBOUNCE_MS = 75;
 export const DEFAULT_RECONCILE_INTERVAL_MS = 30_000;
-
-const RELEVANT_SESSION_EVENT_TYPES = new Set([
-  "message.created",
-  "message.updated",
-  "message.removed",
-  "message.part.created",
-  "message.part.updated",
-  "message.part.removed",
-]);
-
-export interface SessionEventLike {
-  readonly type?: unknown;
-  readonly sessionID?: unknown;
-  readonly sessionId?: unknown;
-  readonly properties?: unknown;
-}
 
 export interface RefreshWatcher {
   close(): void;
@@ -50,11 +31,7 @@ export type WatchFactory = (
 
 export interface RefreshCoordinatorOptions {
   readonly projectDirectory: string;
-  readonly currentSessionID: string;
-  readonly getReferenceSource: () => ChangeReferenceSource;
-  readonly subscribeToSessionEvents: (
-    listener: (event: SessionEventLike) => void,
-  ) => () => void;
+  readonly listGateway: OpenSpecListGateway;
   readonly statusGateway: OpenSpecStatusGateway;
   readonly readTaskFile?: (taskFilePath: string) => Promise<string>;
   readonly parseTasks?: (markdown: string) => TaskDocument;
@@ -76,17 +53,6 @@ interface WatchSet {
   readonly watchers: readonly RefreshWatcher[];
 }
 
-export function isRelevantCurrentSessionEvent(
-  event: SessionEventLike,
-  currentSessionID: string,
-): boolean {
-  return (
-    typeof event.type === "string" &&
-    RELEVANT_SESSION_EVENT_TYPES.has(event.type) &&
-    sessionIDFromEvent(event) === currentSessionID
-  );
-}
-
 export function createRefreshCoordinator(
   options: RefreshCoordinatorOptions,
 ): RefreshCoordinator {
@@ -100,7 +66,6 @@ export function createRefreshCoordinator(
 
   let state: PresentationState = { status: "idle" };
   let watchSet: WatchSet | undefined;
-  let unsubscribeSession: (() => void) | undefined;
   let debounceHandle: ReturnType<typeof setTimeout> | undefined;
   let reconcileHandle: ReturnType<typeof setInterval> | undefined;
   let refreshLoop: Promise<void> | undefined;
@@ -141,7 +106,7 @@ export function createRefreshCoordinator(
   const handleWatchError = (watchSetAtRegistration: WatchSet): void => {
     if (disposed || watchSet !== watchSetAtRegistration) return;
     replaceWatchSet(undefined);
-    publishStale("Task watch unavailable");
+    publishStale("OpenSpec watch unavailable");
     scheduleDebouncedRefresh();
   };
 
@@ -152,6 +117,13 @@ export function createRefreshCoordinator(
     let nextWatchSet: WatchSet;
     try {
       nextWatchSet = { change, watchers };
+      watchers.push(
+        createWatcher(change.changesDirectoryPath, {
+          change: scheduleDebouncedRefresh,
+          error: () => handleWatchError(nextWatchSet),
+        }),
+      );
+
       watchers.push(
         createWatcher(change.taskFilePath, {
           change: scheduleDebouncedRefresh,
@@ -178,28 +150,37 @@ export function createRefreshCoordinator(
   };
 
   const refreshOnce = async (version: number): Promise<void> => {
-    let referenceSource: ChangeReferenceSource;
+    let selection: Awaited<ReturnType<OpenSpecListGateway["resolve"]>>;
     try {
-      referenceSource = options.getReferenceSource();
+      selection = await options.listGateway.resolve(options.projectDirectory);
     } catch {
-      publishStale("Session validation unavailable");
+      if (!disposed && version === requestVersion) {
+        publishStale("OpenSpec list unavailable");
+      }
       return;
     }
-
-    const reference = extractNewestChangeReference({
-      ...referenceSource,
-      currentSessionID: options.currentSessionID,
-    });
     if (disposed || version !== requestVersion) return;
-    if (reference.status !== "valid") {
+    if (selection.status === "no-candidate") {
       publishIdle();
       return;
     }
+    if (selection.status === "temporary-failure") {
+      publishStale("OpenSpec list unavailable");
+      return;
+    }
 
-    const resolution = await options.statusGateway.resolve(
-      reference.name,
-      options.projectDirectory,
-    );
+    let resolution: Awaited<ReturnType<OpenSpecStatusGateway["resolve"]>>;
+    try {
+      resolution = await options.statusGateway.resolve(
+        selection.changeName,
+        options.projectDirectory,
+      );
+    } catch {
+      if (!disposed && version === requestVersion) {
+        publishStale("OpenSpec validation unavailable");
+      }
+      return;
+    }
     if (disposed || version !== requestVersion) return;
     if (resolution.status === "authoritative-failure") {
       publishIdle();
@@ -248,7 +229,7 @@ export function createRefreshCoordinator(
       publish({
         status: "stale",
         snapshot,
-        health: { status: "stale", reason: "Task watch unavailable" },
+        health: { status: "stale", reason: "OpenSpec watch unavailable" },
       });
     }
   };
@@ -284,11 +265,6 @@ export function createRefreshCoordinator(
     async start() {
       if (disposed || started) return refreshLoop;
       started = true;
-      unsubscribeSession = options.subscribeToSessionEvents((event) => {
-        if (isRelevantCurrentSessionEvent(event, options.currentSessionID)) {
-          void requestRefresh();
-        }
-      });
       reconcileHandle = setInterval(() => {
         void requestRefresh();
       }, reconcileIntervalMs);
@@ -315,13 +291,6 @@ export function createRefreshCoordinator(
       requestVersion += 1;
       refreshRequested = false;
       listeners.clear();
-
-      try {
-        unsubscribeSession?.();
-      } catch {
-        // Lifecycle cleanup remains best-effort and continues through all resources.
-      }
-      unsubscribeSession = undefined;
 
       replaceWatchSet(undefined);
       if (debounceHandle) clearTimeout(debounceHandle);
@@ -355,22 +324,6 @@ function closeWatchers(watchers: readonly RefreshWatcher[]): void {
       // A failed close must not prevent the remaining lifecycle cleanup.
     }
   }
-}
-
-function sessionIDFromEvent(event: SessionEventLike): string | undefined {
-  const properties = asRecord(event.properties);
-  const info = asRecord(properties?.info);
-  const part = asRecord(properties?.part);
-  return firstString(
-    event.sessionID,
-    event.sessionId,
-    properties?.sessionID,
-    properties?.sessionId,
-    info?.sessionID,
-    info?.sessionId,
-    part?.sessionID,
-    part?.sessionId,
-  );
 }
 
 function samePresentationState(
@@ -427,18 +380,7 @@ function sameActiveChange(left: ActiveChange, right: ActiveChange): boolean {
   return (
     left.name === right.name &&
     left.rootPath === right.rootPath &&
-    left.taskFilePath === right.taskFilePath
+    left.taskFilePath === right.taskFilePath &&
+    left.changesDirectoryPath === right.changesDirectoryPath
   );
-}
-
-function firstString(...values: readonly unknown[]): string | undefined {
-  return values.find(
-    (value): value is string => typeof value === "string" && value.length > 0,
-  );
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
 }

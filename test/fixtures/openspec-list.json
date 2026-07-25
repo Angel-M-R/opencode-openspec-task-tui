@@ -1,0 +1,36 @@
+{
+  "changes": [
+    {
+      "name": "fixture-no-tasks",
+      "completedTasks": 0,
+      "totalTasks": 0,
+      "lastModified": "2026-07-25T16:00:00.000Z",
+      "status": "no-tasks"
+    },
+    {
+      "name": "fixture-complete-change",
+      "completedTasks": 3,
+      "totalTasks": 3,
+      "lastModified": "2026-07-25T15:00:00.000Z",
+      "status": "complete"
+    },
+    {
+      "name": "fixture-active-change",
+      "completedTasks": 2,
+      "totalTasks": 5,
+      "lastModified": "2026-07-25T14:00:00.000Z",
+      "status": "in-progress"
+    },
+    {
+      "name": "fixture-older-active-change",
+      "completedTasks": 1,
+      "totalTasks": 4,
+      "lastModified": "2026-07-25T13:00:00.000Z",
+      "status": "in-progress"
+    }
+  ],
+  "root": {
+    "path": "/workspace/openspec-opencode-statusline",
+    "source": "nearest"
+  }
+}

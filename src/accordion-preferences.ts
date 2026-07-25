@@ -1,4 +1,4 @@
-import { isValidChangeName } from "./change-reference.js";
+import { isValidChangeName } from "./change-name.js";
 
 const PREFERENCE_KEY_NAMESPACE = "openspec-task-tui:accordion:v1";
 

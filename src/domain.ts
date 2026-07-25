@@ -2,6 +2,7 @@ export interface ActiveChange {
   readonly name: string;
   readonly rootPath: string;
   readonly taskFilePath: string;
+  readonly changesDirectoryPath: string;
 }
 
 export interface Task {

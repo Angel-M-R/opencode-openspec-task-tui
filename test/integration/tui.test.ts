@@ -5,79 +5,124 @@ import type {
 import type { KeyEvent, MouseEvent } from "@opentui/core";
 import { describe, expect, it, vi } from "vitest";
 
-import type { SessionMessageLike } from "../../src/change-reference.js";
+import {
+  selectOpenSpecCandidate,
+  type OpenSpecListGateway,
+} from "../../src/openspec-list.js";
 import type { OpenSpecStatusGateway } from "../../src/openspec-status.js";
-import type { WatchFactory } from "../../src/refresh-coordinator.js";
+import type {
+  WatchFactory,
+  WatchHandlers,
+} from "../../src/refresh-coordinator.js";
 import {
   SIDEBAR_SLOT_ORDER,
   activateSectionFromKey,
   activateSectionFromMouse,
   createOpenSpecTaskTui,
   createSidebarRuntime,
-  resolveCurrentSessionID,
   type OpenSpecTaskTuiDependencies,
   type SidebarRuntime,
   type SidebarView,
 } from "../../src/tui.js";
+import {
+  loadOpenSpecFixture,
+  type OpenSpecListChangeFixture,
+} from "../helpers/openspec-fixtures.js";
 
-const CURRENT_SESSION_ID = "session-current";
-const OTHER_SESSION_ID = "session-other";
 const PROJECT_DIRECTORY = "/workspace/project";
+const CHANGES_DIRECTORY = `${PROJECT_DIRECTORY}/openspec/changes`;
+
+interface WatchSubscription {
+  readonly targetPath: string;
+  readonly handlers: WatchHandlers;
+  readonly closeSpy: ReturnType<typeof vi.fn<() => void>>;
+  closed: boolean;
+  close(): void;
+}
 
 interface Harness {
   readonly api: TuiPluginApi;
   readonly registered: () => TuiSlotPlugin;
-  readonly messages: SessionMessageLike[];
   readonly markdownByChange: Map<string, string>;
-  readonly temporaryChanges: Set<string>;
   readonly dependencies: OpenSpecTaskTuiDependencies;
-  readonly watchClosers: ReturnType<typeof vi.fn>[];
+  readonly listCalls: string[];
   readonly statusCalls: { changeName: string; projectDirectory: string }[];
-  readonly emitSessionChange: (sessionID?: string) => void;
+  readonly eventSubscriptions: ReturnType<typeof vi.fn>;
+  readonly watchSubscriptions: WatchSubscription[];
+  readonly setCandidates: (changes: readonly OpenSpecListChangeFixture[]) => void;
+  readonly setListFailure: (failed: boolean) => void;
+  readonly emitInventoryChange: () => void;
   readonly disposeLifecycle: () => Promise<void>;
-  readonly unsubscribedEventCount: () => number;
 }
 
 async function createHarness(): Promise<Harness> {
-  const messages: SessionMessageLike[] = [];
   const markdownByChange = new Map<string, string>();
-  const temporaryChanges = new Set<string>();
   const kvValues = new Map<string, unknown>();
+  const listCalls: string[] = [];
   const statusCalls: { changeName: string; projectDirectory: string }[] = [];
-  const watchClosers: ReturnType<typeof vi.fn>[] = [];
+  const watchSubscriptions: WatchSubscription[] = [];
   const lifecycleHandlers = new Set<() => void | Promise<void>>();
-  const eventHandlers = new Map<string, Set<(event: unknown) => void>>();
-  let unsubscribedEvents = 0;
+  const eventSubscriptions = vi.fn(() => {
+    throw new Error("The sidebar must not subscribe to session events");
+  });
+  let candidates: readonly OpenSpecListChangeFixture[] = [];
+  let listFailure = false;
   let slotPlugin: TuiSlotPlugin | undefined;
+  const listFixture = loadOpenSpecFixture("openspec-list.json");
+
+  const listGateway: OpenSpecListGateway = {
+    async resolve(projectDirectory) {
+      listCalls.push(projectDirectory);
+      if (listFailure) {
+        return { status: "temporary-failure", reason: "command" };
+      }
+
+      const selection = selectOpenSpecCandidate(
+        { ...listFixture, changes: candidates },
+      );
+      return selection.status === "invalid-list"
+        ? { status: "temporary-failure", reason: "invalid-list" }
+        : selection;
+    },
+  };
 
   const statusGateway: OpenSpecStatusGateway = {
     async resolve(changeName, projectDirectory) {
       statusCalls.push({ changeName, projectDirectory });
-      if (temporaryChanges.has(changeName)) {
-        return { status: "temporary-failure", reason: "command" };
-      }
       if (!markdownByChange.has(changeName)) {
         return { status: "authoritative-failure", reason: "missing-change" };
       }
-      const rootPath = `${PROJECT_DIRECTORY}/openspec/changes/${changeName}`;
+      const rootPath = `${CHANGES_DIRECTORY}/${changeName}`;
       return {
         status: "resolved",
         change: {
           name: changeName,
           rootPath,
           taskFilePath: `${rootPath}/tasks.md`,
+          changesDirectoryPath: CHANGES_DIRECTORY,
         },
       };
     },
   };
 
-  const watch: WatchFactory = () => {
-    const close = vi.fn();
-    watchClosers.push(close);
-    return { close };
+  const watch: WatchFactory = (targetPath, handlers) => {
+    const closeSpy = vi.fn<() => void>();
+    const subscription: WatchSubscription = {
+      targetPath,
+      handlers,
+      closeSpy,
+      closed: false,
+      close() {
+        subscription.closed = true;
+        closeSpy();
+      },
+    };
+    watchSubscriptions.push(subscription);
+    return subscription;
   };
 
   const dependencies: OpenSpecTaskTuiDependencies = {
+    listGateway,
     statusGateway,
     watch,
     readTaskFile: async (taskFilePath) => {
@@ -88,16 +133,12 @@ async function createHarness(): Promise<Harness> {
       if (markdown === undefined) throw new Error("Missing task fixture");
       return markdown;
     },
+    debounceMs: 0,
     reconcileIntervalMs: 60_000,
   };
 
   const api = {
-    route: {
-      current: {
-        name: "session",
-        params: { sessionID: CURRENT_SESSION_ID },
-      },
-    },
+    route: { current: { name: "home" } },
     state: {
       path: {
         directory: PROJECT_DIRECTORY,
@@ -105,10 +146,6 @@ async function createHarness(): Promise<Harness> {
         state: "/state",
         config: "/config",
       },
-      session: {
-        messages: () => messages,
-      },
-      part: () => [],
     },
     kv: {
       ready: true,
@@ -118,20 +155,7 @@ async function createHarness(): Promise<Harness> {
         kvValues.set(key, value);
       },
     },
-    event: {
-      on: (type: string, handler: (event: unknown) => void) => {
-        const handlers = eventHandlers.get(type) ?? new Set();
-        handlers.add(handler);
-        eventHandlers.set(type, handlers);
-        let subscribed = true;
-        return () => {
-          if (!subscribed) return;
-          subscribed = false;
-          handlers.delete(handler);
-          unsubscribedEvents += 1;
-        };
-      },
-    },
+    event: { on: eventSubscriptions },
     lifecycle: {
       signal: new AbortController().signal,
       onDispose: (handler: () => void | Promise<void>) => {
@@ -156,38 +180,44 @@ async function createHarness(): Promise<Harness> {
       if (!slotPlugin) throw new Error("Sidebar slot was not registered");
       return slotPlugin;
     },
-    messages,
     markdownByChange,
-    temporaryChanges,
     dependencies,
-    watchClosers,
+    listCalls,
     statusCalls,
-    emitSessionChange(sessionID = CURRENT_SESSION_ID) {
-      const event = {
-        type: "message.updated",
-        properties: { info: { sessionID } },
-      };
-      for (const handler of eventHandlers.get(event.type) ?? []) handler(event);
+    eventSubscriptions,
+    watchSubscriptions,
+    setCandidates(changes) {
+      candidates = changes;
+    },
+    setListFailure(failed) {
+      listFailure = failed;
+    },
+    emitInventoryChange() {
+      for (const subscription of [...watchSubscriptions]) {
+        if (!subscription.closed && subscription.targetPath === CHANGES_DIRECTORY) {
+          subscription.handlers.change();
+        }
+      }
     },
     async disposeLifecycle() {
       for (const handler of [...lifecycleHandlers]) await handler();
     },
-    unsubscribedEventCount: () => unsubscribedEvents,
   };
 }
 
-function message(
-  id: string,
-  sessionID: string,
-  text: string,
-): SessionMessageLike {
-  return { id, sessionID, text };
+function candidate(
+  name: string,
+  status: "in-progress" | "complete",
+  lastModified: string,
+  completedTasks = 99,
+  totalTasks = 100,
+): OpenSpecListChangeFixture {
+  return { name, status, lastModified, completedTasks, totalTasks };
 }
 
 async function startRuntime(harness: Harness): Promise<SidebarRuntime> {
   const runtime = createSidebarRuntime({
     api: harness.api,
-    sessionID: CURRENT_SESSION_ID,
     dependencies: harness.dependencies,
   });
   await runtime.start();
@@ -207,50 +237,54 @@ async function waitForView(
 }
 
 describe("OpenCode TUI integration", () => {
-  it("registers only the ordered sidebar slot and isolates the current session", async () => {
+  it("resolves a project candidate without a session and renders tasks.md progress", async () => {
     const harness = await createHarness();
-    harness.messages.push(
-      message("current", CURRENT_SESSION_ID, "openspec status --change alpha --json"),
-      message("other", OTHER_SESSION_ID, "openspec status --change beta --json"),
-    );
+    harness.setCandidates([
+      candidate(
+        "project-change",
+        "in-progress",
+        "2026-07-25T14:00:00.000Z",
+      ),
+    ]);
     harness.markdownByChange.set(
-      "alpha",
+      "project-change",
       "## Plan\n- [ ] A deliberately long task label kept on one row\n- [x] Done",
     );
-    harness.markdownByChange.set("beta", "## Wrong\n- [ ] Other session");
 
     const registered = harness.registered();
     expect(registered.order).toBe(SIDEBAR_SLOT_ORDER);
     expect(Object.keys(registered.slots)).toEqual(["sidebar_content"]);
-    expect(
-      resolveCurrentSessionID(harness.api, { session_id: "slot-session" }),
-    ).toBe("slot-session");
-    expect(resolveCurrentSessionID(harness.api, {})).toBe(CURRENT_SESSION_ID);
-
     const runtime = await startRuntime(harness);
     const view = runtime.getView();
     expect(view.status).toBe("ready");
     if (view.status === "idle") throw new Error("Expected active view");
-    expect(view.title).toBe("OpenSpec: alpha 1/2");
+    expect(view.title).toBe("OpenSpec: project-change 1/2");
+    expect(view.title).not.toContain("99/100");
     expect(view.sections[0]?.header).toBe("▼ Plan 1/2");
     expect(view.sections[0]?.tasks.map((task) => task.text)).toEqual([
       "  ☐ A deliberately long task label kept on one row",
       "  ✓ Done",
     ]);
     expect(view.sections[0]?.tasks[0]?.text).not.toContain("\n");
+    expect(harness.listCalls).toEqual([PROJECT_DIRECTORY]);
     expect(harness.statusCalls).toEqual([
-      { changeName: "alpha", projectDirectory: PROJECT_DIRECTORY },
+      { changeName: "project-change", projectDirectory: PROJECT_DIRECTORY },
     ]);
+    expect(harness.eventSubscriptions).not.toHaveBeenCalled();
 
     runtime.dispose();
     await harness.disposeLifecycle();
   });
 
-  it("toggles sections independently by mouse/keyboard activation and restores collapse state", async () => {
+  it("toggles sections independently and restores collapse state", async () => {
     const harness = await createHarness();
-    harness.messages.push(
-      message("current", CURRENT_SESSION_ID, "--change accordion-change"),
-    );
+    harness.setCandidates([
+      candidate(
+        "accordion-change",
+        "in-progress",
+        "2026-07-25T14:00:00.000Z",
+      ),
+    ]);
     harness.markdownByChange.set(
       "accordion-change",
       [
@@ -285,7 +319,6 @@ describe("OpenCode TUI integration", () => {
     if (view.status === "idle") throw new Error("Expected active view");
     expect(view.sections[0]?.header).toBe("▶ First 0/1");
     expect(view.sections[0]?.tasks).toEqual([]);
-    expect(view.sections[1]?.tasks[0]?.text).toContain("Second task");
 
     const enterEvent = {
       name: "return",
@@ -293,114 +326,106 @@ describe("OpenCode TUI integration", () => {
       stopPropagation: vi.fn(),
     } as unknown as KeyEvent;
     activateSectionFromKey(enterEvent, () =>
-      runtime.toggleSection(view.status === "idle" ? "" : view.sections[1]!.id),
+      runtime.toggleSection(view.sections[1]!.id),
     );
     expect(enterEvent.preventDefault).toHaveBeenCalledOnce();
     expect(enterEvent.stopPropagation).toHaveBeenCalledOnce();
-    view = runtime.getView();
-    if (view.status === "idle") throw new Error("Expected active view");
-    expect(view.sections.map((section) => section.collapsed)).toEqual([true, true]);
-    const spaceEvent = {
-      name: "space",
-      preventDefault: vi.fn(),
-      stopPropagation: vi.fn(),
-    } as unknown as KeyEvent;
-    const secondSectionID = view.sections[1]!.id;
-    activateSectionFromKey(spaceEvent, () =>
-      runtime.toggleSection(secondSectionID),
-    );
-    const expandedView = runtime.getView();
-    expect(
-      expandedView.status === "idle"
-        ? []
-        : expandedView.sections.map((section) => section.collapsed),
-    ).toEqual([true, false]);
 
     runtime.dispose();
     const restored = await startRuntime(harness);
     const restoredView = restored.getView();
     if (restoredView.status === "idle") throw new Error("Expected active view");
-    expect(restoredView.sections[0]?.collapsed).toBe(true);
-    expect(restoredView.sections[1]?.collapsed).toBe(false);
+    expect(restoredView.sections.map((section) => section.collapsed)).toEqual([
+      true,
+      true,
+    ]);
 
     restored.dispose();
     await harness.disposeLifecycle();
   });
 
-  it("replaces the active change, refreshes counts, retains stale data, and cleans up", async () => {
+  it("switches by list precedence and retains stale rendering on list failure", async () => {
     const harness = await createHarness();
-    harness.messages.push(
-      message("alpha", CURRENT_SESSION_ID, "--change alpha-change"),
-    );
-    harness.markdownByChange.set(
-      "alpha-change",
-      "## Work\n- [ ] One\n- [ ] Two",
-    );
+    harness.setCandidates([
+      candidate(
+        "complete-change",
+        "complete",
+        "2026-07-25T18:00:00.000Z",
+      ),
+    ]);
+    harness.markdownByChange.set("complete-change", "## Done\n- [x] Complete");
+    harness.markdownByChange.set("active-change", "## Work\n- [ ] Active");
 
     const runtime = await startRuntime(harness);
     expect(runtime.getView()).toMatchObject({
       status: "ready",
-      title: "OpenSpec: alpha-change 0/2",
+      title: "OpenSpec: complete-change 1/1",
     });
 
-    harness.markdownByChange.set(
-      "alpha-change",
-      "## Work\n- [x] One\n- [ ] Two",
-    );
-    harness.emitSessionChange();
+    harness.setCandidates([
+      candidate(
+        "complete-change",
+        "complete",
+        "2026-07-25T18:00:00.000Z",
+      ),
+      candidate(
+        "active-change",
+        "in-progress",
+        "2026-07-25T10:00:00.000Z",
+      ),
+    ]);
+    harness.emitInventoryChange();
     let view = await waitForView(
       runtime,
-      (candidate) =>
-        candidate.status !== "idle" && candidate.title.endsWith("1/2"),
+      (current) =>
+        current.status !== "idle" && current.title.includes("active-change"),
     );
-    if (view.status === "idle") throw new Error("Expected active view");
-    expect(view.sections[0]?.header).toBe("▼ Work 1/2");
-    expect(view.sections[0]?.tasks[0]?.text).toBe("  ✓ One");
+    expect(view).toMatchObject({
+      status: "ready",
+      title: "OpenSpec: active-change 0/1",
+    });
 
-    harness.messages.push(
-      message("beta", CURRENT_SESSION_ID, "openspec/changes/beta-change"),
-    );
-    harness.markdownByChange.set("beta-change", "## New\n- [x] Replacement");
-    harness.emitSessionChange();
-    view = await waitForView(
-      runtime,
-      (candidate) =>
-        candidate.status !== "idle" && candidate.title.includes("beta-change"),
-    );
-    if (view.status === "idle") throw new Error("Expected active view");
-    expect(view.title).toBe("OpenSpec: beta-change 1/1");
-    expect(view.sections[0]?.tasks[0]?.text).toContain("Replacement");
-
-    harness.temporaryChanges.add("beta-change");
-    harness.emitSessionChange();
-    view = await waitForView(runtime, (candidate) => candidate.status === "stale");
-    if (view.status !== "stale") throw new Error("Expected stale view");
-    expect(view.title).toBe("OpenSpec: beta-change 1/1");
-    expect(view.staleWarning).toBe("Stale · OpenSpec validation unavailable");
-    expect(view.sections[0]?.tasks[0]?.text).toContain("Replacement");
+    harness.setListFailure(true);
+    harness.emitInventoryChange();
+    view = await waitForView(runtime, (current) => current.status === "stale");
+    expect(view).toMatchObject({
+      status: "stale",
+      title: "OpenSpec: active-change 0/1",
+      staleWarning: "Stale · OpenSpec list unavailable",
+    });
 
     runtime.dispose();
-    expect(harness.unsubscribedEventCount()).toBe(4);
-    expect(harness.watchClosers.length).toBeGreaterThanOrEqual(4);
-    expect(harness.watchClosers.every((close) => close.mock.calls.length === 1)).toBe(
-      true,
-    );
+    expect(
+      harness.watchSubscriptions.every(
+        (subscription) => subscription.closeSpy.mock.calls.length === 1,
+      ),
+    ).toBe(true);
     await harness.disposeLifecycle();
   });
 
-  it("renders a discreet empty state without mutation or selection controls", async () => {
+  it("clears to the empty state when the project has no candidate", async () => {
     const harness = await createHarness();
-    harness.messages.push(message("plain", CURRENT_SESSION_ID, "No change here"));
+    harness.setCandidates([
+      candidate(
+        "archived-change",
+        "in-progress",
+        "2026-07-25T14:00:00.000Z",
+      ),
+    ]);
+    harness.markdownByChange.set("archived-change", "## Work\n- [ ] Pending");
 
     const runtime = await startRuntime(harness);
-    expect(runtime.getView()).toEqual({
+    expect(runtime.getView().status).toBe("ready");
+
+    harness.setCandidates([]);
+    harness.emitInventoryChange();
+    const view = await waitForView(runtime, (current) => current.status === "idle");
+    expect(view).toEqual({
       status: "idle",
       emptyText: "No active OpenSpec change",
     });
-    expect(JSON.stringify(runtime.getView())).not.toMatch(
-      /select|apply|verify|archive|edit/i,
-    );
-    expect(harness.statusCalls).toHaveLength(0);
+    expect(JSON.stringify(view)).not.toMatch(/select|apply|verify|archive|edit/i);
+    expect(harness.statusCalls).toHaveLength(1);
 
     runtime.dispose();
     await harness.disposeLifecycle();

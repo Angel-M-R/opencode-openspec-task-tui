@@ -1,16 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  createOpenSpecStatusGateway,
-  STATUS_MAX_OUTPUT_BYTES,
-  STATUS_TIMEOUT_MS,
+  PROCESS_MAX_OUTPUT_BYTES,
+  PROCESS_TIMEOUT_MS,
   type ProcessExecutionResult,
   type ProcessExecutor,
-} from "../../src/openspec-status.js";
+} from "../../src/openspec-process.js";
+import { createOpenSpecStatusGateway } from "../../src/openspec-status.js";
+import { loadOpenSpecFixture } from "../helpers/openspec-fixtures.js";
 
 const CHANGE_NAME = "active-change";
 const CHANGE_ROOT = "/project/openspec/changes/active-change";
 const TASK_FILE = `${CHANGE_ROOT}/tasks.md`;
+const CHANGES_DIRECTORY = "/project/openspec/changes";
 
 function statusJson(
   overrides: Record<string, unknown> = {},
@@ -19,6 +21,10 @@ function statusJson(
     stdout: JSON.stringify({
       changeName: CHANGE_NAME,
       changeRoot: CHANGE_ROOT,
+      planningHome: {
+        root: "/project",
+        changesDir: CHANGES_DIRECTORY,
+      },
       artifactPaths: {
         tasks: { resolvedOutputPath: TASK_FILE },
       },
@@ -30,23 +36,30 @@ function statusJson(
 
 describe("createOpenSpecStatusGateway", () => {
   it("executes status with bounded argument-array options and resolves validated paths", async () => {
-    const executor = vi.fn<ProcessExecutor>(async () => statusJson());
+    const fixture = loadOpenSpecFixture("openspec-status.json");
+    const executor = vi.fn<ProcessExecutor>(async () => ({
+      stdout: JSON.stringify(fixture),
+      stderr: "",
+    }));
     const gateway = createOpenSpecStatusGateway(executor);
 
-    await expect(gateway.resolve(CHANGE_NAME, "/project")).resolves.toEqual({
+    await expect(
+      gateway.resolve(fixture.changeName, fixture.planningHome.root),
+    ).resolves.toEqual({
       status: "resolved",
       change: {
-        name: CHANGE_NAME,
-        rootPath: CHANGE_ROOT,
-        taskFilePath: TASK_FILE,
+        name: fixture.changeName,
+        rootPath: fixture.changeRoot,
+        taskFilePath: fixture.artifactPaths.tasks.resolvedOutputPath,
+        changesDirectoryPath: fixture.planningHome.changesDir,
       },
     });
     expect(executor).toHaveBeenCalledWith({
       command: "openspec",
-      args: ["status", "--change", CHANGE_NAME, "--json"],
-      cwd: "/project",
-      timeoutMs: STATUS_TIMEOUT_MS,
-      maxOutputBytes: STATUS_MAX_OUTPUT_BYTES,
+      args: ["status", "--change", fixture.changeName, "--json"],
+      cwd: fixture.planningHome.root,
+      timeoutMs: PROCESS_TIMEOUT_MS,
+      maxOutputBytes: PROCESS_MAX_OUTPUT_BYTES,
     });
   });
 
@@ -132,7 +145,7 @@ describe("createOpenSpecStatusGateway", () => {
 
   it("bounds output even when an injected executor ignores the request limit", async () => {
     const gateway = createOpenSpecStatusGateway(async () => ({
-      stdout: "x".repeat(STATUS_MAX_OUTPUT_BYTES + 1),
+      stdout: "x".repeat(PROCESS_MAX_OUTPUT_BYTES + 1),
       stderr: "",
     }));
 
@@ -155,6 +168,54 @@ describe("createOpenSpecStatusGateway", () => {
     );
 
     await expect(gateway.resolve(CHANGE_NAME, "/project")).resolves.toEqual({
+      status: "temporary-failure",
+      reason: "unsafe-path",
+    });
+  });
+
+  it("normalizes the status-derived planning changes directory", async () => {
+    const captured = loadOpenSpecFixture("openspec-status.json");
+    const fixture = {
+      ...captured,
+      planningHome: {
+        ...captured.planningHome,
+        changesDir:
+          "/workspace/openspec-opencode-statusline/openspec/nested/../changes",
+      },
+    };
+    const gateway = createOpenSpecStatusGateway(async () => ({
+      stdout: JSON.stringify(fixture),
+      stderr: "",
+    }));
+
+    await expect(
+      gateway.resolve(fixture.changeName, fixture.planningHome.root),
+    ).resolves.toMatchObject({
+      status: "resolved",
+      change: {
+        changesDirectoryPath:
+          "/workspace/openspec-opencode-statusline/openspec/changes",
+      },
+    });
+  });
+
+  it("rejects a planning changes directory outside its status planning root", async () => {
+    const captured = loadOpenSpecFixture("openspec-status.json");
+    const fixture = {
+      ...captured,
+      planningHome: {
+        ...captured.planningHome,
+        changesDir: "/workspace/other/changes",
+      },
+    };
+    const gateway = createOpenSpecStatusGateway(async () => ({
+      stdout: JSON.stringify(fixture),
+      stderr: "",
+    }));
+
+    await expect(
+      gateway.resolve(fixture.changeName, fixture.planningHome.root),
+    ).resolves.toEqual({
       status: "temporary-failure",
       reason: "unsafe-path",
     });
