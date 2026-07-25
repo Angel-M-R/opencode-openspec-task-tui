@@ -4,12 +4,13 @@ The package is not published anywhere and has no automated quality gate: every r
 
 ## What Changes
 
-- Add a **release pipeline** (`.github/workflows/release.yml`) that runs `semantic-release` on every push to `main`. It derives the next version from conventional commits, publishes to npm, and creates the `vX.Y.Z` git tag plus the GitHub Release with generated notes. Tags and releases are *outputs* of the pipeline, never triggers.
-- Authenticate to npm with **npm Trusted Publishing (OIDC)**. No `NPM_TOKEN` is stored in GitHub; provenance attestation is produced automatically. This requires the package to already exist on the registry, so the very first `1.0.0` publish is a deliberate one-time manual bootstrap performed by the maintainer.
-- Add a **CI pipeline** (`.github/workflows/ci.yml`) that runs typecheck, tests, `pnpm pack --dry-run`, and `pnpm audit --prod --audit-level moderate` on pull requests and pushes. CI validates; it never publishes.
+- Add a **release pipeline** (`.github/workflows/release.yml`) that ultimately runs `semantic-release` on every push to `main`. It derives the next version from conventional commits, publishes to npm, and creates the `vX.Y.Z` git tag plus the GitHub Release with generated notes. Tags and releases are *outputs* of the pipeline, never triggers. During bootstrap the fully defined workflow is deliberately dormant, with `workflow_dispatch` as its only trigger; it is neither run nor dispatched before npm trust exists.
+- Authenticate to npm with **npm Trusted Publishing (OIDC)**. No `NPM_TOKEN` is stored in GitHub; provenance attestation is produced automatically. This requires both the package to exist on the registry and the referenced `release.yml` workflow to exist in the canonical repository, so rollout is deliberately ordered: manually bootstrap `1.0.0`, merge CI plus the dormant release workflow, confirm CI is green and the workflow file exists on canonical `main`, configure the Trusted Publisher, then activate `push` on `main` in the first release-worthy pull request.
+- Add a **CI pipeline** (`.github/workflows/ci.yml`) that runs typecheck, tests, `pnpm run pack:dry-run`, and `pnpm audit --prod --audit-level moderate` on pull requests and pushes. CI validates; it never publishes.
 - **Enforce conventional commits locally** with `commitlint` + `husky`, so the version semantics the release pipeline depends on are actually respected. CI installs dependencies with `--ignore-scripts`, so hooks are never installed on runners.
 - Complete the **publishable package metadata** that OIDC and the registry require: `repository.url`, `homepage`, and `bugs` must use the canonical `Angel-M-R/opencode-openspec-task-tui` GitHub repository, alongside a MIT `LICENSE` file, `keywords`, and `publishConfig.access: public`. The local Git `origin` must also use that canonical repository before bootstrap publishing. The `version` field becomes the sentinel `0.0.0-development`; git tags and the registry are the source of truth.
 - No publication gate beyond the pipeline itself: any push to `main` carrying a `feat:` or `fix:` commit publishes a release.
+- Use the already-prepared README correction as the first real automated patch release. Complete that correction with release-process documentation, activate the release workflow's `push`-to-`main` trigger in the same pull request, merge it with an accurate `fix:` message, and verify OIDC publishes `1.0.1` with provenance while `package.json` on `main` retains the sentinel version.
 
 ## Capabilities
 
@@ -24,8 +25,8 @@ The package is not published anywhere and has no automated quality gate: every r
 ## Impact
 
 - **New files**: `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `LICENSE`, commitlint config, husky `commit-msg` hook.
-- **Modified files**: `package.json` (metadata, `version` sentinel, `release` config block, `devDependencies`, release-related scripts), `pnpm-lock.yaml`.
+- **Modified files**: `package.json` (metadata, `version` sentinel, `release` config block, `devDependencies`, release-related scripts), `pnpm-lock.yaml`, `README.md` (active-change selection correction and release-process documentation).
 - **New devDependencies**: `semantic-release` and its four plugins (`commit-analyzer`, `release-notes-generator`, `npm`, `github`), `@commitlint/cli`, `@commitlint/config-conventional`, `husky`.
 - **No product/runtime code changes.** `src/`, `test/`, and build configuration are untouched; runtime `peerDependencies` are unaffected.
-- **External systems**: an npm account and a published `1.0.0` package; a per-package Trusted Publisher configured on npmjs.com; GitHub Actions permissions (`id-token: write`, `contents: write`) using only the built-in `GITHUB_TOKEN`.
+- **External systems**: an npm account and a published `1.0.0` package; the merged but dormant `.github/workflows/release.yml` on canonical `main` before a per-package Trusted Publisher is configured on npmjs.com; GitHub Actions permissions (`id-token: write`, `contents: write`) using only the built-in `GITHUB_TOKEN`. Push activation occurs only after that publisher is configured.
 - **Irreversibility risk**: an npm publish cannot be undone after 72 hours, and a wrong `repository.url` breaks OIDC silently until the first CI publish attempt.
