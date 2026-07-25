@@ -2,6 +2,22 @@
   "name": "opencode-openspec-task-tui",
   "version": "0.1.0",
   "description": "OpenCode TUI sidebar for active OpenSpec task progress",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Angel-M-R/openspec-opencode-status-line"
+  },
+  "homepage": "https://github.com/Angel-M-R/openspec-opencode-status-line#readme",
+  "bugs": {
+    "url": "https://github.com/Angel-M-R/openspec-opencode-status-line/issues"
+  },
+  "keywords": [
+    "opencode",
+    "openspec",
+    "plugin",
+    "tui",
+    "statusline",
+    "tasks"
+  ],
   "type": "module",
   "packageManager": "pnpm@10.8.0",
   "engines": {
@@ -20,9 +36,13 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
     "prepack": "pnpm run build",
