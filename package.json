@@ -53,6 +53,7 @@
     "test": "pnpm run test:unit && pnpm run test:integration",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
+    "test:tui": "pnpm run build && bun test --preload ./test/helpers/opentui-solid-runtime.ts test/integration/tui.test.ts --test-name-pattern \"renders the full truncated task description after a real mouse move\"",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },

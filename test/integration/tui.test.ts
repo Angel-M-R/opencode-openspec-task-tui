@@ -1,8 +1,16 @@
 import type {
   TuiPluginApi,
   TuiSlotPlugin,
+  TuiSlotContext,
+  TuiThemeCurrent,
 } from "@opencode-ai/plugin/tui";
-import type { KeyEvent, MouseEvent } from "@opentui/core";
+import {
+  type BoxRenderable,
+  RGBA,
+  type KeyEvent,
+  type MouseEvent,
+} from "@opentui/core";
+import { createElement, insert, spread, testRender } from "@opentui/solid";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -14,23 +22,37 @@ import type {
   WatchFactory,
   WatchHandlers,
 } from "../../src/refresh-coordinator.js";
-import {
-  SIDEBAR_SLOT_ORDER,
-  activateSectionFromKey,
-  activateSectionFromMouse,
-  createOpenSpecTaskTui,
-  createSidebarRuntime,
-  type OpenSpecTaskTuiDependencies,
-  type SidebarRuntime,
-  type SidebarView,
+import type {
+  OpenSpecTaskTuiDependencies,
+  SidebarRuntime,
+  SidebarView,
 } from "../../src/tui.js";
 import {
   loadOpenSpecFixture,
   type OpenSpecListChangeFixture,
 } from "../helpers/openspec-fixtures.js";
 
+const IS_BUN = "Bun" in globalThis;
+const tuiModule = IS_BUN ? "../../dist/tui.js" : "../../src/tui.js";
+const {
+  SIDEBAR_SLOT_ORDER,
+  activateSectionFromKey,
+  activateSectionFromMouse,
+  createOpenSpecTaskTui,
+  createSidebarRuntime,
+  measureTaskTooltipHeight,
+} = (await import(tuiModule)) as typeof import("../../src/tui.js");
+
 const PROJECT_DIRECTORY = "/workspace/project";
 const CHANGES_DIRECTORY = `${PROJECT_DIRECTORY}/openspec/changes`;
+const TEST_COLOR = RGBA.fromHex("#ffffff");
+const TEST_THEME = {
+  text: TEST_COLOR,
+  textMuted: TEST_COLOR,
+  success: TEST_COLOR,
+  warning: TEST_COLOR,
+  backgroundMenu: TEST_COLOR,
+} as TuiThemeCurrent;
 
 interface WatchSubscription {
   readonly targetPath: string;
@@ -237,6 +259,74 @@ async function waitForView(
 }
 
 describe("OpenCode TUI integration", () => {
+  const realOpenTuiTest = IS_BUN ? it : it.skip;
+
+  realOpenTuiTest(
+    "renders the full truncated task description after a real mouse move",
+    async () => {
+      const harness = await createHarness();
+      const description =
+        "1.2 Verify a completed task whose description intentionally continues far beyond a narrow sidebar width is truncated while preserving the full sentence for tooltip inspection.";
+      expect(measureTaskTooltipHeight(description, 36, "unicode")).toBe(6);
+      harness.setCandidates([
+        candidate(
+          "tooltip-change",
+          "in-progress",
+          "2026-07-25T14:00:00.000Z",
+        ),
+      ]);
+      harness.markdownByChange.set(
+        "tooltip-change",
+        `## Plan\n- [ ] ${description}`,
+      );
+
+      const sidebarContent = harness.registered().slots.sidebar_content;
+      if (!sidebarContent) throw new Error("Expected sidebar content slot");
+      const context = {
+        theme: { current: TEST_THEME },
+      } as TuiSlotContext;
+      const rendered = await testRender(
+        () => {
+          const host = createElement("box") as BoxRenderable;
+          spread(host, { width: "100%", height: "100%" });
+          const sidebar = createElement("box") as BoxRenderable;
+          spread(sidebar, {
+            position: "absolute",
+            right: 0,
+            top: 0,
+            width: 36,
+            height: "100%",
+          });
+          insert(
+            sidebar,
+            () => sidebarContent(context, { session_id: "test-session" }),
+          );
+          host.add(sidebar);
+          return host;
+        },
+        { width: 80, height: 12 },
+      );
+
+      try {
+        const initialFrame = await rendered.waitForFrame(async (frame) => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          return frame.includes("Plan 0/1");
+        });
+        expect(initialFrame.replace(/\s+/g, " ")).not.toContain(description);
+
+        await rendered.mockMouse.moveTo(49, 2);
+        const tooltipFrame = await rendered.waitForFrame((frame) =>
+          frame.replace(/\s+/g, " ").includes(description),
+        );
+
+        expect(tooltipFrame.replace(/\s+/g, " ")).toContain(description);
+      } finally {
+        rendered.renderer.destroy();
+        await harness.disposeLifecycle();
+      }
+    },
+  );
+
   it("resolves a project candidate without a session and renders tasks.md progress", async () => {
     const harness = await createHarness();
     harness.setCandidates([

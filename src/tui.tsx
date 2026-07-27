@@ -1,4 +1,13 @@
-import type { KeyEvent, MouseEvent } from "@opentui/core";
+import {
+  type BoxRenderable,
+  type KeyEvent,
+  type MouseEvent,
+  TextBuffer,
+  TextBufferView,
+  type TextRenderable,
+  type WidthMethod,
+} from "@opentui/core";
+import { Portal, useRenderer } from "@opentui/solid";
 import type {
   TuiPlugin,
   TuiPluginApi,
@@ -60,11 +69,35 @@ interface SectionProps {
   readonly collapsed: boolean;
   readonly theme: TuiThemeCurrent;
   readonly onToggle: () => void;
+  readonly onTaskPointerMove: (
+    task: SidebarTaskRowView,
+    rowLeft: number,
+    rowTop: number,
+    rowWidth: number,
+    textWidth: number,
+  ) => void;
+  readonly onTaskPointerOut: () => void;
+}
+
+interface TaskRowProps {
+  readonly task: SidebarTaskRowView;
+  readonly theme: TuiThemeCurrent;
+  readonly onPointerMove: SectionProps["onTaskPointerMove"];
+  readonly onPointerOut: () => void;
 }
 
 export interface SidebarTaskRowView {
   readonly text: string;
+  readonly description: string;
   readonly completed: boolean;
+}
+
+export interface TaskTooltipLayout {
+  readonly description: string;
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
 }
 
 export interface SidebarSectionView {
@@ -112,6 +145,75 @@ export function activateSectionFromMouse(
   event.target?.focus();
   activate();
   return true;
+}
+
+export function resolveTaskTooltip(input: {
+  readonly description: string;
+  readonly descriptionHeight: number;
+  readonly textWidth: number;
+  readonly rowLeft: number;
+  readonly rowTop: number;
+  readonly rowWidth: number;
+  readonly viewportWidth: number;
+  readonly viewportHeight: number;
+}): TaskTooltipLayout | undefined {
+  if (
+    input.rowWidth < 1 ||
+    input.textWidth <= input.rowWidth ||
+    input.viewportWidth < 1 ||
+    input.viewportHeight < 1
+  ) {
+    return undefined;
+  }
+
+  const globalLeft = Math.min(
+    Math.max(0, input.rowLeft),
+    input.viewportWidth - 1,
+  );
+  const width = Math.min(input.rowWidth, input.viewportWidth - globalLeft);
+  const height = Math.min(
+    input.viewportHeight,
+    Math.max(1, input.descriptionHeight),
+  );
+  const preferredTop = input.rowTop + 1;
+  const globalTop =
+    preferredTop + height <= input.viewportHeight
+      ? preferredTop
+      : Math.max(0, input.rowTop - height);
+
+  return {
+    description: input.description,
+    left: globalLeft,
+    top: globalTop,
+    width,
+    height,
+  };
+}
+
+export function measureTaskTooltipHeight(
+  description: string,
+  width: number,
+  widthMethod: WidthMethod,
+): number {
+  if (width < 1) return 1;
+
+  const buffer = TextBuffer.create(widthMethod);
+  const view = TextBufferView.create(buffer);
+  try {
+    buffer.setText(description);
+    view.setWrapMode("word");
+    view.setWrapWidth(width);
+    return Math.max(
+      1,
+      view.measureForDimensions(
+        width,
+        Math.max(1, description.length),
+      )?.lineCount ?? 1,
+    );
+  } finally {
+    view.destroy();
+    buffer.destroy();
+  }
 }
 
 export function resolveProjectContext(api: TuiPluginApi): ProjectContext {
@@ -268,17 +370,27 @@ export function createSidebarRuntime(input: {
 }
 
 function OpenSpecSidebar(props: SidebarProps) {
+  const renderer = useRenderer();
   const runtime = createSidebarRuntime({
     api: props.api,
     project: props.project,
     dependencies: props.dependencies,
   });
   const [view, setView] = createSignal(runtime.getView());
-  const unsubscribe = runtime.subscribe((next) => batch(() => setView(next)));
+  const [tooltip, setTooltip] = createSignal<TaskTooltipLayout>();
+  const tooltipHeightCache = new Map<string, number>();
+  const clearTooltip = (): void => setTooltip(undefined);
+  const unsubscribe = runtime.subscribe((next) =>
+    batch(() => {
+      clearTooltip();
+      setView(next);
+    }),
+  );
   let cleanedUp = false;
   const cleanup = (): void => {
     if (cleanedUp) return;
     cleanedUp = true;
+    clearTooltip();
     unsubscribe();
     runtime.dispose();
   };
@@ -314,7 +426,45 @@ function OpenSpecSidebar(props: SidebarProps) {
                     sectionIndex={sectionIndex()}
                     collapsed={section.collapsed}
                     theme={props.theme}
-                    onToggle={() => runtime.toggleSection(section.id)}
+                    onToggle={() => {
+                      clearTooltip();
+                      runtime.toggleSection(section.id);
+                    }}
+                    onTaskPointerMove={(
+                      task,
+                      rowLeft,
+                      rowTop,
+                      rowWidth,
+                      textWidth,
+                    ) => {
+                      const heightCacheKey = `${renderer.widthMethod}:${rowWidth}:${task.description}`;
+                      let descriptionHeight =
+                        tooltipHeightCache.get(heightCacheKey);
+                      if (descriptionHeight === undefined) {
+                        descriptionHeight = measureTaskTooltipHeight(
+                          task.description,
+                          rowWidth,
+                          renderer.widthMethod,
+                        );
+                        tooltipHeightCache.set(
+                          heightCacheKey,
+                          descriptionHeight,
+                        );
+                      }
+                      setTooltip(
+                        resolveTaskTooltip({
+                          description: task.description,
+                          descriptionHeight,
+                          textWidth,
+                          rowLeft,
+                          rowTop,
+                          rowWidth,
+                          viewportWidth: renderer.width,
+                          viewportHeight: renderer.height,
+                        }),
+                      );
+                    }}
+                    onTaskPointerOut={clearTooltip}
                   />
                 )}
               </For>
@@ -322,6 +472,45 @@ function OpenSpecSidebar(props: SidebarProps) {
           );
         })()}
       </Show>
+      <Portal
+        ref={(container) => {
+          // Portal's wrapper otherwise enters the full-screen root flow below the viewport.
+          const overlayRoot = container as BoxRenderable;
+          overlayRoot.position = "absolute";
+          overlayRoot.left = 0;
+          overlayRoot.top = 0;
+          overlayRoot.width = 0;
+          overlayRoot.height = 0;
+          overlayRoot.zIndex = 1000;
+        }}
+      >
+        <Show when={tooltip()}>
+          {(current: () => TaskTooltipLayout) => (
+            <box
+              id="openspec-task-tooltip"
+              position="absolute"
+              left={current().left}
+              top={current().top}
+              width={current().width}
+              height={current().height}
+              zIndex={1000}
+              overflow="hidden"
+              backgroundColor={props.theme.backgroundMenu}
+              onMouse={clearTooltip}
+            >
+              <text
+                width="100%"
+                height="100%"
+                wrapMode="word"
+                selectable={false}
+                fg={props.theme.text}
+              >
+                {current().description}
+              </text>
+            </box>
+          )}
+        </Show>
+      </Portal>
     </box>
   );
 }
@@ -352,12 +541,72 @@ function TaskSectionView(props: SectionProps) {
       <Show when={!props.collapsed}>
         <For each={props.section.tasks}>
           {(task) => (
-            <CompactText fg={task.completed ? props.theme.success : props.theme.textMuted}>
-              {task.text}
-            </CompactText>
+            <TaskRow
+              task={task}
+              theme={props.theme}
+              onPointerMove={props.onTaskPointerMove}
+              onPointerOut={props.onTaskPointerOut}
+            />
           )}
         </For>
       </Show>
+    </box>
+  );
+}
+
+function TaskRow(props: TaskRowProps) {
+  let row: BoxRenderable | undefined;
+  let text: TextRenderable | undefined;
+
+  onCleanup(props.onPointerOut);
+
+  return (
+    <box
+      ref={row}
+      width="100%"
+      maxWidth="100%"
+      minWidth={0}
+      height={1}
+      overflow="hidden"
+      onMouseMove={() => {
+        if (!row) return;
+        if (text) text.scrollX = 0;
+        props.onPointerMove(
+          props.task,
+          row.screenX,
+          row.screenY,
+          row.width,
+          text?.scrollWidth ?? row.width,
+        );
+      }}
+      onMouseOut={props.onPointerOut}
+      onMouseScroll={(event) => {
+        if (text) text.scrollX = 0;
+        if (
+          event.modifiers.shift ||
+          event.scroll?.direction === "left" ||
+          event.scroll?.direction === "right"
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+    >
+      <text
+        ref={text}
+        width="100%"
+        maxWidth="100%"
+        minWidth={0}
+        height={1}
+        flexShrink={1}
+        overflow="hidden"
+        wrapMode="none"
+        truncate
+        selectable={false}
+        fg={props.task.completed ? props.theme.success : props.theme.textMuted}
+      >
+        {props.task.text}
+      </text>
     </box>
   );
 }
@@ -419,6 +668,7 @@ function toSidebarView(
           ? []
           : section.tasks.map((task) => ({
               text: `  ${task.completed ? "✓" : "☐"} ${task.label}`,
+              description: task.label,
               completed: task.completed,
             })),
       };
