@@ -9,6 +9,7 @@ import {
   RGBA,
   type KeyEvent,
   type MouseEvent,
+  type TextRenderable,
 } from "@opentui/core";
 import { createElement, insert, spread, testRender } from "@opentui/solid";
 import { describe, expect, it, vi } from "vitest";
@@ -313,6 +314,16 @@ describe("OpenCode TUI integration", () => {
           return frame.includes("Plan 0/1");
         });
         expect(initialFrame.replace(/\s+/g, " ")).not.toContain(description);
+        const titleRow =
+          rendered.renderer.root.findDescendantById("openspec-title");
+        const titleText = titleRow?.getChildren()[0] as
+          | TextRenderable
+          | undefined;
+        expect(titleText?.scrollWidth).toBeLessThanOrEqual(titleRow?.width ?? 0);
+
+        await rendered.mockMouse.moveTo(49, 0);
+        await rendered.flush();
+        expect(rendered.captureCharFrame()).toContain("▼ Plan 0/1");
 
         await rendered.mockMouse.moveTo(49, 2);
         const tooltipFrame = await rendered.waitForFrame((frame) =>
@@ -320,6 +331,140 @@ describe("OpenCode TUI integration", () => {
         );
 
         expect(tooltipFrame.replace(/\s+/g, " ")).toContain(description);
+      } finally {
+        rendered.renderer.destroy();
+        await harness.disposeLifecycle();
+      }
+    },
+  );
+
+  realOpenTuiTest(
+    "shows only the full title for a truncated section header after a real mouse move",
+    async () => {
+      const harness = await createHarness();
+      const changeName = "section-tooltip-change-with-a-deliberately-long-name";
+      const fullMainTitle = `OpenSpec: ${changeName} 0/2`;
+      const compactMainTitle = fullMainTitle.replace(/\s+/g, "");
+      const title = "Section title fits without metadata";
+      harness.setCandidates([
+        candidate(
+          changeName,
+          "in-progress",
+          "2026-07-25T14:00:00.000Z",
+        ),
+      ]);
+      harness.markdownByChange.set(
+        changeName,
+        [`## ${title}`, "- [ ] Child task", "## Short", "- [ ] Other task"].join(
+          "\n",
+        ),
+      );
+
+      const sidebarContent = harness.registered().slots.sidebar_content;
+      if (!sidebarContent) throw new Error("Expected sidebar content slot");
+      const context = {
+        theme: { current: TEST_THEME },
+      } as TuiSlotContext;
+      const rendered = await testRender(
+        () => {
+          const host = createElement("box") as BoxRenderable;
+          spread(host, { width: "100%", height: "100%" });
+          const sidebar = createElement("box") as BoxRenderable;
+          spread(sidebar, {
+            position: "absolute",
+            right: 0,
+            top: 0,
+            width: 36,
+            height: "100%",
+          });
+          insert(
+            sidebar,
+            () => sidebarContent(context, { session_id: "test-session" }),
+          );
+          host.add(sidebar);
+          return host;
+        },
+        { width: 80, height: 12 },
+      );
+
+      try {
+        const initialFrame = await rendered.waitForFrame(
+          (frame) =>
+            frame.includes("▼ Section title") && frame.includes("Child task"),
+        );
+        expect(initialFrame).not.toContain(title);
+        expect(initialFrame.replace(/\s+/g, "")).not.toContain(compactMainTitle);
+        const mainTitleRow = rendered.renderer.root.findDescendantById(
+          "openspec-title",
+        );
+        const mainTitleText = mainTitleRow?.getChildren()[0] as
+          | TextRenderable
+          | undefined;
+        expect(mainTitleText?.scrollWidth).toBeGreaterThan(
+          mainTitleRow?.width ?? 0,
+        );
+
+        await rendered.mockMouse.moveTo(49, 0);
+        const mainTitleTooltipFrame = await rendered.waitForFrame((frame) =>
+          frame.replace(/\s+/g, "").includes(compactMainTitle),
+        );
+        expect(mainTitleTooltipFrame.replace(/\s+/g, "")).toContain(
+          compactMainTitle,
+        );
+
+        await rendered.mockMouse.moveTo(0, 11);
+        await rendered.waitForFrame(
+          (frame) => !frame.replace(/\s+/g, "").includes(compactMainTitle),
+        );
+        const sectionHeader = rendered.renderer.root.findDescendantById(
+          "openspec-section-0",
+        );
+        const sectionText = sectionHeader?.getChildren()[0] as
+          | TextRenderable
+          | undefined;
+        expect(sectionText?.scrollWidth).toBeGreaterThan(
+          sectionHeader?.width ?? 0,
+        );
+
+        await rendered.mockMouse.moveTo(49, 1);
+        const expandedTooltipFrame = await rendered.waitForFrame((frame) =>
+          frame.includes(title),
+        );
+        expect(
+          expandedTooltipFrame
+            .split("\n")
+            .find((line) => line.includes(title))
+            ?.trim(),
+        ).toBe(title);
+
+        await rendered.mockMouse.click(49, 1);
+        await rendered.waitForFrame(
+          (frame) =>
+            frame.includes("▶ Section title") && !frame.includes("Child task"),
+        );
+
+        await rendered.mockMouse.moveTo(48, 0);
+        await rendered.mockMouse.moveTo(49, 1);
+        const collapsedTooltipFrame = await rendered.waitForFrame((frame) =>
+          frame.includes(title),
+        );
+        expect(
+          collapsedTooltipFrame
+            .split("\n")
+            .find((line) => line.includes(title))
+            ?.trim(),
+        ).toBe(title);
+
+        await rendered.mockMouse.moveTo(0, 11);
+        await rendered.waitForFrame((frame) => !frame.includes(title));
+        await rendered.mockMouse.moveTo(49, 2);
+        await rendered.flush();
+        expect(
+          rendered
+            .captureCharFrame()
+            .split("\n")
+            .some((line) => line.trim() === "Short"),
+        ).toBe(false);
       } finally {
         rendered.renderer.destroy();
         await harness.disposeLifecycle();

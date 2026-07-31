@@ -69,20 +69,20 @@ interface SectionProps {
   readonly collapsed: boolean;
   readonly theme: TuiThemeCurrent;
   readonly onToggle: () => void;
-  readonly onTaskPointerMove: (
-    task: SidebarTaskRowView,
+  readonly onTooltipPointerMove: (
+    description: string,
     rowLeft: number,
     rowTop: number,
     rowWidth: number,
     textWidth: number,
   ) => void;
-  readonly onTaskPointerOut: () => void;
+  readonly onTooltipPointerOut: () => void;
 }
 
 interface TaskRowProps {
   readonly task: SidebarTaskRowView;
   readonly theme: TuiThemeCurrent;
-  readonly onPointerMove: SectionProps["onTaskPointerMove"];
+  readonly onPointerMove: SectionProps["onTooltipPointerMove"];
   readonly onPointerOut: () => void;
 }
 
@@ -102,6 +102,7 @@ export interface TaskTooltipLayout {
 
 export interface SidebarSectionView {
   readonly id: string;
+  readonly title: string;
   readonly header: string;
   readonly collapsed: boolean;
   readonly tasks: readonly SidebarTaskRowView[];
@@ -371,6 +372,8 @@ export function createSidebarRuntime(input: {
 
 function OpenSpecSidebar(props: SidebarProps) {
   const renderer = useRenderer();
+  let titleRow: BoxRenderable | undefined;
+  let titleText: TextRenderable | undefined;
   const runtime = createSidebarRuntime({
     api: props.api,
     project: props.project,
@@ -380,6 +383,36 @@ function OpenSpecSidebar(props: SidebarProps) {
   const [tooltip, setTooltip] = createSignal<TaskTooltipLayout>();
   const tooltipHeightCache = new Map<string, number>();
   const clearTooltip = (): void => setTooltip(undefined);
+  const showTooltip = (
+    description: string,
+    rowLeft: number,
+    rowTop: number,
+    rowWidth: number,
+    textWidth: number,
+  ): void => {
+    const heightCacheKey = `${renderer.widthMethod}:${rowWidth}:${description}`;
+    let descriptionHeight = tooltipHeightCache.get(heightCacheKey);
+    if (descriptionHeight === undefined) {
+      descriptionHeight = measureTaskTooltipHeight(
+        description,
+        rowWidth,
+        renderer.widthMethod,
+      );
+      tooltipHeightCache.set(heightCacheKey, descriptionHeight);
+    }
+    setTooltip(
+      resolveTaskTooltip({
+        description,
+        descriptionHeight,
+        textWidth,
+        rowLeft,
+        rowTop,
+        rowWidth,
+        viewportWidth: renderer.width,
+        viewportHeight: renderer.height,
+      }),
+    );
+  };
   const unsubscribe = runtime.subscribe((next) =>
     batch(() => {
       clearTooltip();
@@ -411,9 +444,36 @@ function OpenSpecSidebar(props: SidebarProps) {
           if (current.status === "idle") return null;
           return (
             <>
-              <CompactText fg={props.theme.text}>
-                {current.title}
-              </CompactText>
+              <box
+                ref={titleRow}
+                id="openspec-title"
+                width="100%"
+                height={1}
+                onMouseMove={() => {
+                  if (!titleRow) return;
+                  if (titleText) titleText.scrollX = 0;
+                  showTooltip(
+                    current.title,
+                    titleRow.screenX,
+                    titleRow.screenY,
+                    titleRow.width,
+                    titleText?.scrollWidth ?? titleRow.width,
+                  );
+                }}
+                onMouseOut={clearTooltip}
+              >
+                <text
+                  ref={titleText}
+                  width="100%"
+                  height={1}
+                  wrapMode="none"
+                  truncate
+                  selectable={false}
+                  fg={props.theme.text}
+                >
+                  {current.title}
+                </text>
+              </box>
               <Show when={current.status === "stale"}>
                 <CompactText fg={props.theme.warning} opacity={0.75}>
                   {current.staleWarning ?? ""}
@@ -430,41 +490,8 @@ function OpenSpecSidebar(props: SidebarProps) {
                       clearTooltip();
                       runtime.toggleSection(section.id);
                     }}
-                    onTaskPointerMove={(
-                      task,
-                      rowLeft,
-                      rowTop,
-                      rowWidth,
-                      textWidth,
-                    ) => {
-                      const heightCacheKey = `${renderer.widthMethod}:${rowWidth}:${task.description}`;
-                      let descriptionHeight =
-                        tooltipHeightCache.get(heightCacheKey);
-                      if (descriptionHeight === undefined) {
-                        descriptionHeight = measureTaskTooltipHeight(
-                          task.description,
-                          rowWidth,
-                          renderer.widthMethod,
-                        );
-                        tooltipHeightCache.set(
-                          heightCacheKey,
-                          descriptionHeight,
-                        );
-                      }
-                      setTooltip(
-                        resolveTaskTooltip({
-                          description: task.description,
-                          descriptionHeight,
-                          textWidth,
-                          rowLeft,
-                          rowTop,
-                          rowWidth,
-                          viewportWidth: renderer.width,
-                          viewportHeight: renderer.height,
-                        }),
-                      );
-                    }}
-                    onTaskPointerOut={clearTooltip}
+                    onTooltipPointerMove={showTooltip}
+                    onTooltipPointerOut={clearTooltip}
                   />
                 )}
               </For>
@@ -516,6 +543,8 @@ function OpenSpecSidebar(props: SidebarProps) {
 }
 
 function TaskSectionView(props: SectionProps) {
+  let row: BoxRenderable | undefined;
+  let text: TextRenderable | undefined;
   const activate = (): void => props.onToggle();
   const handleKeyDown = (event: KeyEvent): void => {
     activateSectionFromKey(event, activate);
@@ -524,19 +553,42 @@ function TaskSectionView(props: SectionProps) {
     activateSectionFromMouse(event, activate);
   };
 
+  onCleanup(props.onTooltipPointerOut);
+
   return (
     <box flexDirection="column" width="100%">
       <box
+        ref={row}
         id={`openspec-section-${props.sectionIndex}`}
         width="100%"
         height={1}
         focusable
         onKeyDown={handleKeyDown}
         onMouseDown={handleMouseDown}
+        onMouseMove={() => {
+          if (!row) return;
+          if (text) text.scrollX = 0;
+          props.onTooltipPointerMove(
+            props.section.title,
+            row.screenX,
+            row.screenY,
+            row.width,
+            text?.scrollWidth ?? row.width,
+          );
+        }}
+        onMouseOut={props.onTooltipPointerOut}
       >
-        <CompactText fg={props.theme.text}>
+        <text
+          ref={text}
+          width="100%"
+          height={1}
+          wrapMode="none"
+          truncate
+          selectable={false}
+          fg={props.theme.text}
+        >
           {props.section.header}
-        </CompactText>
+        </text>
       </box>
       <Show when={!props.collapsed}>
         <For each={props.section.tasks}>
@@ -544,8 +596,8 @@ function TaskSectionView(props: SectionProps) {
             <TaskRow
               task={task}
               theme={props.theme}
-              onPointerMove={props.onTaskPointerMove}
-              onPointerOut={props.onTaskPointerOut}
+              onPointerMove={props.onTooltipPointerMove}
+              onPointerOut={props.onTooltipPointerOut}
             />
           )}
         </For>
@@ -572,7 +624,7 @@ function TaskRow(props: TaskRowProps) {
         if (!row) return;
         if (text) text.scrollX = 0;
         props.onPointerMove(
-          props.task,
+          props.task.description,
           row.screenX,
           row.screenY,
           row.width,
@@ -662,6 +714,7 @@ function toSidebarView(
       const collapsed = collapsedSectionIds.has(section.id);
       return {
         id: section.id,
+        title: section.label,
         header: `${collapsed ? "▶" : "▼"} ${section.label} ${section.progress.completed}/${section.progress.total}`,
         collapsed,
         tasks: collapsed
