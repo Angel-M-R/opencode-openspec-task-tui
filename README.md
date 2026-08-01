@@ -2,7 +2,7 @@
 
 `opencode-openspec-task-tui` automatically selects the active OpenSpec change for the current project and adds a read-only OpenCode sidebar. It shows global and per-section task progress and keeps accordion preferences separate by project and change.
 
-<img width="708" height="508" alt="CleanShot 2026-08-01 at 13 09 53@2x" src="https://github.com/user-attachments/assets/89ea9e4e-6245-4753-9567-ac49dd55d8b2" />
+<img width="350" height="250" alt="CleanShot 2026-08-01 at 13 09 53@2x" src="https://github.com/user-attachments/assets/89ea9e4e-6245-4753-9567-ac49dd55d8b2" />
 
 
 ## Requirements
