@@ -50,5 +50,3 @@ Point OpenCode at the resulting JavaScript file with an absolute path:
 ```
 
 Restart OpenCode. Keep the bundle in this package directory so its OpenCode, OpenTUI, and Solid peer dependencies remain resolvable.
-
-## Acti
