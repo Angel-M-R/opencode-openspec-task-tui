@@ -33,6 +33,7 @@ export function parseTaskDocument(markdown: string): TaskDocument {
   let currentSection: SectionReference | undefined;
   let fallbackSection: SectionReference | undefined;
   let fence: Fence | undefined;
+  let comment = false;
 
   const createSectionReference = (label: string): SectionReference => {
     const normalizedLabel = normalizeSectionLabel(label);
@@ -62,12 +63,36 @@ export function parseTaskDocument(markdown: string): TaskDocument {
     currentSection.section.tasks.push(task);
   };
 
-  for (const line of markdown.split(/\r?\n/)) {
+  for (let line of markdown.split(/\r?\n/)) {
     if (fence) {
       if (closesFence(line, fence)) fence = undefined;
       continue;
     }
 
+    let visible = "";
+    while (line) {
+      if (comment) {
+        const end = line.indexOf("-->");
+        if (end < 0) break;
+        line = line.slice(end + 3);
+        comment = false;
+        continue;
+      }
+      if (line.startsWith("<!--")) { comment = true; line = line.slice(4); continue; }
+      const ticks = line.match(/^`+/)?.[0];
+      if (ticks) {
+        // Only a matching run closes a Markdown code span. Unmatched ticks
+        // remain literal text, so they cannot hide a real HTML comment.
+        const end = Array.from(line.slice(ticks.length).matchAll(/`+/g))
+          .find(match => match[0].length === ticks.length);
+        if (end) {
+          const length = ticks.length + end.index! + ticks.length;
+          visible += line.slice(0, length); line = line.slice(length); continue;
+        }
+      }
+      visible += line[0]; line = line.slice(1);
+    }
+    line = visible;
     const fenceMatch = line.match(FENCE_PATTERN);
     if (fenceMatch) {
       const delimiter = fenceMatch[1];
