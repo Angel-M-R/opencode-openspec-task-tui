@@ -77,13 +77,14 @@ function resolveWindowsShim(cwd: string): string {
     if (!win32.isAbsolute(directory)) continue;
     try {
       const shim = realpathSync(win32.join(directory, "openspec.cmd"));
+      if (!statSync(shim).isFile()) continue;
       const relative = win32.relative(project, shim);
       // A shim inside the project is repository-controlled code; never run it.
       if (!win32.isAbsolute(relative) && relative !== ".." && !relative.startsWith("..\\")) {
         skippedProjectShim = true;
         continue;
       }
-      if (statSync(shim).isFile()) return shim;
+      return shim;
     } catch { /* Try the next absolute PATH directory. */ }
   }
   throw new Error(skippedProjectShim
