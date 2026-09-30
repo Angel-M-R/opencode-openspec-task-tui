@@ -7,46 +7,53 @@
 
 ## Requirements
 
-- Node.js 22.13 or newer
-- OpenCode with a compatible TUI plugin API
-- The `openspec` CLI available on `PATH`
-- An OpenSpec project opened as the current OpenCode project
+The `openspec` CLI must be available on `PATH`, and the current session must
+point at an OpenSpec project. This plugin only displays progress; it does not
+install OpenSpec or edit tasks. Sections can be collapsed with the mouse or
+keyboard. Hover truncated task and section text to see the full description.
 
-## Install from npm
+## OpenCode v2 migration
 
-Install the package:
-
-```sh
-npm install opencode-openspec-task-tui
-```
-
-Add its TUI entry to `~/.config/opencode/tui.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["opencode-openspec-task-tui"]
-}
-```
-
-Restart OpenCode after changing the configuration.
-
-## Use a local compiled bundle
-
-From this repository, install dependencies and build the bundle:
+This branch targets OpenCode 2.0.18 and OpenTUI 0.5.12. It uses the native
+`@opencode/plugin/tui` API and no longer supports the v1 plugin API.
+The npm release must include this migration before the package name can be
+used with v2. To try this branch now, build it locally with Node.js 22.13 or
+newer and pnpm 10.8:
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
 ```
 
-Point OpenCode at the resulting JavaScript file with an absolute path:
+Add the **dist directory** to `~/.config/opencode/cli.json`:
 
 ```json
 {
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["/absolute/path/to/opencode-openspec-task-tui/dist/tui.js"]
+  "plugins": ["/absolute/path/to/opencode-openspec-task-tui/dist"]
 }
 ```
 
-Restart OpenCode. Keep the bundle in this package directory so its OpenCode, OpenTUI, and Solid peer dependencies remain resolvable.
+Merge this entry with your existing `plugins` array. Keep the bundle in its
+package directory so peer dependencies remain resolvable. After a v2-compatible
+npm release is published, replace the path with `opencode-openspec-task-tui@<version>`.
+Restart OpenCode after changing the configuration.
+
+Remove the old entry from `opencode.json` or `tui.json`. OpenCode v2 CLI plugins
+use `cli.json` and the plural `plugins` key. See the
+[official plugin documentation](https://opencode.ai/v2/docs/cli/plugins).
+Preferences from the v1 key-value store are not imported; set them again once
+in v2.
+
+## Development
+
+Bun is required for the native OpenTUI tests. CI uses Bun 1.4.2.
+
+```sh
+pnpm typecheck
+pnpm test
+pnpm run pack:dry-run
+pnpm audit --prod --audit-level moderate
+```
+
+Unit tests cover discovery and domain behavior. Native tests render the v2
+slots and exercise the plugin lifecycle with OpenTUI.
