@@ -10,6 +10,7 @@ import {
 } from "@opentui/core";
 import { createElement, insert, spread, testRender } from "@opentui/solid";
 import { describe, expect, it, mock } from "bun:test";
+import { createSignal, untrack } from "solid-js";
 const vi = { fn: mock };
 
 import {
@@ -75,7 +76,9 @@ interface Harness {
   readonly disposeLifecycle: () => Promise<void>;
 }
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(
+  directoryBySession: Readonly<Record<string, string>> = {},
+): Promise<Harness> {
   const markdownByChange = new Map<string, string>();
   const kvValues = new Map<string, unknown>();
   const listCalls: string[] = [];
@@ -175,7 +178,8 @@ async function createHarness(): Promise<Harness> {
   const stored: Record<string, unknown> = {};
   const native = {
     location: { directory: PROJECT_DIRECTORY },
-    data: { session: { get: () => ({ location: { directory: PROJECT_DIRECTORY } }) },
+    data: { session: { get: (sessionID: string) =>
+      ({ location: { directory: directoryBySession[sessionID] ?? PROJECT_DIRECTORY } }) },
       location: { default: () => ({ directory: PROJECT_DIRECTORY }) } },
     storage: { store: () => [stored, async (update: (draft: Record<string, unknown>) => void) => update(stored)] },
     theme: { text: { base: TEST_COLOR, muted: TEST_COLOR,
@@ -449,6 +453,49 @@ describe("OpenCode TUI integration", () => {
             .split("\n")
             .some((line) => line.trim() === "Short"),
         ).toBe(false);
+      } finally {
+        rendered.renderer.destroy();
+        await harness.disposeLifecycle();
+      }
+    },
+  );
+
+  realOpenTuiTest(
+    "remounts the sidebar for the new project when the session changes",
+    async () => {
+      const otherDirectory = "/workspace/other";
+      const harness = await createHarness({ "other-session": otherDirectory });
+      harness.setCandidates([
+        candidate("switch-change", "in-progress", "2026-07-25T14:00:00.000Z"),
+      ]);
+      harness.markdownByChange.set("switch-change", "## Plan\n- [ ] Pending");
+      const [sessionID, setSessionID] = createSignal("test-session");
+      const sidebarContent = harness.registered().render;
+
+      const rendered = await testRender(
+        () => {
+          const host = createElement("box") as BoxRenderable;
+          spread(host, { width: "100%", height: "100%" });
+          // The host calls render once, untracked like a Solid component, and
+          // keeps its input reactive.
+          insert(host, untrack(() => sidebarContent({ get sessionID() { return sessionID(); } })));
+          return host;
+        },
+        { width: 40, height: 8 },
+      );
+
+      try {
+        await rendered.waitForFrame((frame) => frame.includes("Plan 0/1"));
+        expect(harness.listCalls).toEqual([PROJECT_DIRECTORY]);
+        const firstProjectWatches = [...harness.watchSubscriptions];
+        expect(firstProjectWatches.length).toBeGreaterThan(0);
+
+        setSessionID("other-session");
+        for (let attempts = 0; attempts < 50 && !harness.listCalls.includes(otherDirectory); attempts += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        expect(harness.listCalls).toEqual([PROJECT_DIRECTORY, otherDirectory]);
+        expect(firstProjectWatches.every((subscription) => subscription.closed)).toBe(true);
       } finally {
         rendered.renderer.destroy();
         await harness.disposeLifecycle();

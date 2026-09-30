@@ -10,7 +10,7 @@ import {
 import { Portal, useRenderer } from "@opentui/solid";
 import { Plugin } from "@opencode/plugin/tui";
 import type { PreferenceKeyValueStore } from "./accordion-preferences.js";
-import { For, Show, batch, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, batch, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
 import {
   createAccordionPreferenceAdapter,
@@ -252,18 +252,22 @@ export function createOpenSpecTaskTui(dependencies: OpenSpecTaskTuiDependencies 
       };
       const sidebarCleanups = new Set<() => void>();
       const release = context.ui.slot({ append: "sidebar.content", render: props => {
-        const directory = context.data.session.get(props.sessionID)?.location.directory
-          ?? context.location?.directory ?? context.data.location.default().directory;
-        const api: SidebarRuntimeApi = { state: { path: { directory, worktree: directory } }, kv };
+        // Slot input is reactive and render runs once, so switching sessions
+        // must re-resolve the directory and remount the sidebar runtime.
+        const directory = createMemo(() => context.data.session.get(props.sessionID)?.location.directory
+          ?? context.location?.directory ?? context.data.location.default().directory);
         const theme: SidebarTheme = {
           text: context.theme.text.base, textMuted: context.theme.text.muted,
           warning: context.theme.text.feedback.warning.base, success: context.theme.text.feedback.success.base,
           backgroundMenu: context.theme.background.menu,
         };
-        return <OpenSpecSidebar api={api} project={resolveProjectContext(api)} theme={theme}
-          dependencies={resolvedDependencies} registerCleanup={cleanup => {
-            sidebarCleanups.add(cleanup); return () => { sidebarCleanups.delete(cleanup); };
-          }} />;
+        return <Show when={directory()} keyed>{(current: string) => {
+          const api: SidebarRuntimeApi = { state: { path: { directory: current, worktree: current } }, kv };
+          return <OpenSpecSidebar api={api} project={resolveProjectContext(api)} theme={theme}
+            dependencies={resolvedDependencies} registerCleanup={cleanup => {
+              sidebarCleanups.add(cleanup); return () => { sidebarCleanups.delete(cleanup); };
+            }} />;
+        }}</Show>;
       } });
       return () => { release(); for (const cleanup of sidebarCleanups) cleanup(); sidebarCleanups.clear(); };
     },

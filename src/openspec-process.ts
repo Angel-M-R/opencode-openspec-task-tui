@@ -64,22 +64,31 @@ export function processCommand(request: ProcessRequest, platform = process.platf
     throw new Error("Unsafe OpenSpec Windows arguments");
   }
   const shim = resolveShim(request.cwd);
-  if (!win32.isAbsolute(shim) || /["%!&|<>^\r\n]/.test(shim)) throw new Error("Unsafe OpenSpec shim path");
+  // The shim path sits inside double quotes, where cmd.exe keeps &|<>^() literal.
+  // Only quotes, variable expansion (%, !) and line breaks can escape them.
+  if (!win32.isAbsolute(shim) || /["%!\r\n]/.test(shim)) throw new Error("Unsafe OpenSpec shim path");
   return { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `""${shim}" ${request.args.join(" ")}"`] };
 }
 
 function resolveWindowsShim(cwd: string): string {
   const project = realpathSync(cwd);
+  let skippedProjectShim = false;
   for (const directory of (process.env.PATH ?? "").split(";")) {
     if (!win32.isAbsolute(directory)) continue;
     try {
       const shim = realpathSync(win32.join(directory, "openspec.cmd"));
       const relative = win32.relative(project, shim);
-      if (!win32.isAbsolute(relative) && relative !== ".." && !relative.startsWith("..\\")) continue;
+      // A shim inside the project is repository-controlled code; never run it.
+      if (!win32.isAbsolute(relative) && relative !== ".." && !relative.startsWith("..\\")) {
+        skippedProjectShim = true;
+        continue;
+      }
       if (statSync(shim).isFile()) return shim;
     } catch { /* Try the next absolute PATH directory. */ }
   }
-  throw new Error("No OpenSpec shim outside the project was found on PATH");
+  throw new Error(skippedProjectShim
+    ? "Only a project-local OpenSpec shim was found on PATH; install OpenSpec globally (npm install -g @fission-ai/openspec)"
+    : "No OpenSpec shim was found on PATH");
 }
 
 const executeOpenSpecProcess: ProcessExecutor = (request) =>
