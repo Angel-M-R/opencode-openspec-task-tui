@@ -57,7 +57,7 @@ describe("selectOpenSpecCandidate", () => {
     });
   });
 
-  it("excludes no-tasks, unsupported, malformed, and unsafe-name entries", () => {
+  it("keeps no-tasks candidates while excluding unsupported, malformed, and unsafe names", () => {
     const fixture: OpenSpecListFixture = {
       ...loadOpenSpecFixture("openspec-list.json"),
       changes: [
@@ -93,7 +93,8 @@ describe("selectOpenSpecCandidate", () => {
     };
 
     expect(selectOpenSpecCandidate(fixture)).toEqual({
-      status: "no-candidate",
+      status: "selected",
+      changeName: "fixture-no-tasks",
     });
   });
 

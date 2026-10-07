@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { realpathSync, statSync } from "node:fs";
+import { win32 } from "node:path";
 import { Buffer } from "node:buffer";
 
 export const PROCESS_TIMEOUT_MS = 5_000;
@@ -55,17 +57,54 @@ export async function runOpenSpecProcess(
   return result;
 }
 
+export function processCommand(request: ProcessRequest, platform = process.platform, resolveShim = resolveWindowsShim): { command: string; args: string[] } {
+  if (platform !== "win32") return { command: request.command, args: [...request.args] };
+  // Only the fixed CLI and shell-neutral list/status arguments reach cmd.exe.
+  if (request.command !== "openspec" || request.args.some(arg => !/^[A-Za-z0-9_-]+$/.test(arg))) {
+    throw new Error("Unsafe OpenSpec Windows arguments");
+  }
+  const shim = resolveShim(request.cwd);
+  // The shim path sits inside double quotes, where cmd.exe keeps &|<>^() literal.
+  // Only quotes, variable expansion (%, !) and line breaks can escape them.
+  if (!win32.isAbsolute(shim) || /["%!\r\n]/.test(shim)) throw new Error("Unsafe OpenSpec shim path");
+  return { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `""${shim}" ${request.args.join(" ")}"`] };
+}
+
+function resolveWindowsShim(cwd: string): string {
+  const project = realpathSync(cwd);
+  let skippedProjectShim = false;
+  for (const directory of (process.env.PATH ?? "").split(";")) {
+    if (!win32.isAbsolute(directory)) continue;
+    try {
+      const shim = realpathSync(win32.join(directory, "openspec.cmd"));
+      if (!statSync(shim).isFile()) continue;
+      const relative = win32.relative(project, shim);
+      // A shim inside the project is repository-controlled code; never run it.
+      if (!win32.isAbsolute(relative) && relative !== ".." && !relative.startsWith("..\\")) {
+        skippedProjectShim = true;
+        continue;
+      }
+      return shim;
+    } catch { /* Try the next absolute PATH directory. */ }
+  }
+  throw new Error(skippedProjectShim
+    ? "Only a project-local OpenSpec shim was found on PATH; install OpenSpec globally (npm install -g @fission-ai/openspec)"
+    : "No OpenSpec shim was found on PATH");
+}
+
 const executeOpenSpecProcess: ProcessExecutor = (request) =>
   new Promise((resolve) => {
+    const launch = processCommand(request);
     execFile(
-      request.command,
-      [...request.args],
+      launch.command,
+      launch.args,
       {
         cwd: request.cwd,
         encoding: "utf8",
         maxBuffer: request.maxOutputBytes,
         timeout: request.timeoutMs,
         windowsHide: true,
+        windowsVerbatimArguments: process.platform === "win32",
       },
       (error, stdout, stderr) => {
         resolve({

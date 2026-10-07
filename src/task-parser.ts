@@ -5,6 +5,7 @@ const LIST_TASK_PATTERN = /^ {0,3}-\s+\[([ xX])\]\s+(.+?)\s*$/;
 const HEADING_TASK_PATTERN = /^ {0,3}###\s+\[([ xX])\]\s+(.+?)\s*$/;
 const HEADING_PATTERN = /^ {0,3}#{1,6}\s+(.+?)\s*$/;
 const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})/;
+const HTML_COMMENT_BLOCK_PATTERN = /^ {0,3}<!--/;
 
 interface MutableSection {
   readonly id: string;
@@ -33,6 +34,7 @@ export function parseTaskDocument(markdown: string): TaskDocument {
   let currentSection: SectionReference | undefined;
   let fallbackSection: SectionReference | undefined;
   let fence: Fence | undefined;
+  let comment = false;
 
   const createSectionReference = (label: string): SectionReference => {
     const normalizedLabel = normalizeSectionLabel(label);
@@ -62,12 +64,23 @@ export function parseTaskDocument(markdown: string): TaskDocument {
     currentSection.section.tasks.push(task);
   };
 
-  for (const line of markdown.split(/\r?\n/)) {
+  for (let line of markdown.split(/\r?\n/)) {
     if (fence) {
       if (closesFence(line, fence)) fence = undefined;
       continue;
     }
 
+    // Only a line that opens with `<!--` starts a CommonMark HTML block, which
+    // hides every following line until one contains `-->`.
+    if (comment) {
+      if (line.includes("-->")) comment = false;
+      continue;
+    }
+    if (HTML_COMMENT_BLOCK_PATTERN.test(line)) {
+      comment = !line.slice(line.indexOf("<!--") + 4).includes("-->");
+      continue;
+    }
+    line = stripInlineComments(line);
     const fenceMatch = line.match(FENCE_PATTERN);
     if (fenceMatch) {
       const delimiter = fenceMatch[1];
@@ -102,6 +115,32 @@ export function parseTaskDocument(markdown: string): TaskDocument {
     sections: finalizedSections,
     progress: sumProgress(finalizedSections.map((section) => section.progress)),
   };
+}
+
+// Inline comments end with their paragraph, so an unclosed `<!--` stays
+// literal text and never hides later lines.
+function stripInlineComments(line: string): string {
+  let visible = "";
+  while (line) {
+    if (line.startsWith("<!--")) {
+      const end = line.indexOf("-->", 4);
+      if (end >= 0) { line = line.slice(end + 3); continue; }
+    }
+    const ticks = line.match(/^`+/)?.[0];
+    if (ticks) {
+      // Only a matching run closes a Markdown code span, so comment markers
+      // inside a closed span stay literal.
+      const end = Array.from(line.slice(ticks.length).matchAll(/`+/g))
+        .find(match => match[0].length === ticks.length);
+      if (end) {
+        const length = ticks.length + end.index! + ticks.length;
+        visible += line.slice(0, length); line = line.slice(length); continue;
+      }
+      visible += ticks; line = line.slice(ticks.length); continue;
+    }
+    visible += line[0]; line = line.slice(1);
+  }
+  return visible;
 }
 
 function toTask(marker: string, label: string): Task {

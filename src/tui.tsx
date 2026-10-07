@@ -8,13 +8,9 @@ import {
   type WidthMethod,
 } from "@opentui/core";
 import { Portal, useRenderer } from "@opentui/solid";
-import type {
-  TuiPlugin,
-  TuiPluginApi,
-  TuiPluginModule,
-  TuiThemeCurrent,
-} from "@opencode-ai/plugin/tui";
-import { For, Show, batch, createRoot, createSignal, onCleanup, onMount } from "solid-js";
+import { Plugin } from "@opencode/plugin/tui";
+import type { PreferenceKeyValueStore } from "./accordion-preferences.js";
+import { For, Show, batch, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
 import {
   createAccordionPreferenceAdapter,
@@ -35,8 +31,19 @@ import {
   type WatchFactory,
 } from "./refresh-coordinator.js";
 
+export interface SidebarRuntimeApi {
+  readonly state: { readonly path: { readonly directory?: string; readonly worktree?: string } };
+  readonly kv: PreferenceKeyValueStore;
+}
+export interface SidebarTheme {
+  readonly text: Plugin.Context["theme"]["text"]["base"];
+  readonly textMuted: Plugin.Context["theme"]["text"]["muted"];
+  readonly success: Plugin.Context["theme"]["text"]["base"];
+  readonly warning: Plugin.Context["theme"]["text"]["base"];
+  readonly backgroundMenu: Plugin.Context["theme"]["background"]["menu"];
+}
+
 export const TUI_PLUGIN_ID = "openspec-task-progress";
-export const SIDEBAR_SLOT_ORDER = 350;
 
 export interface OpenSpecTaskTuiDependencies {
   readonly listGateway?: OpenSpecListGateway;
@@ -53,9 +60,9 @@ export interface ProjectContext {
 }
 
 interface SidebarProps {
-  readonly api: TuiPluginApi;
+  readonly api: SidebarRuntimeApi;
   readonly project: ProjectContext;
-  readonly theme: TuiThemeCurrent;
+  readonly theme: SidebarTheme;
   readonly dependencies: Required<
     Pick<OpenSpecTaskTuiDependencies, "listGateway" | "statusGateway">
   > &
@@ -67,7 +74,7 @@ interface SectionProps {
   readonly section: SidebarSectionView;
   readonly sectionIndex: number;
   readonly collapsed: boolean;
-  readonly theme: TuiThemeCurrent;
+  readonly theme: SidebarTheme;
   readonly onToggle: () => void;
   readonly onTooltipPointerMove: (
     description: string,
@@ -81,7 +88,7 @@ interface SectionProps {
 
 interface TaskRowProps {
   readonly task: SidebarTaskRowView;
-  readonly theme: TuiThemeCurrent;
+  readonly theme: SidebarTheme;
   readonly onPointerMove: SectionProps["onTooltipPointerMove"];
   readonly onPointerOut: () => void;
 }
@@ -217,7 +224,7 @@ export function measureTaskTooltipHeight(
   }
 }
 
-export function resolveProjectContext(api: TuiPluginApi): ProjectContext {
+export function resolveProjectContext(api: SidebarRuntimeApi): ProjectContext {
   const directory =
     nonEmptyString(api.state.path.directory) ??
     nonEmptyString(api.state.path.worktree) ??
@@ -228,61 +235,47 @@ export function resolveProjectContext(api: TuiPluginApi): ProjectContext {
   };
 }
 
-export function createOpenSpecTaskTui(
-  dependencies: OpenSpecTaskTuiDependencies = {},
-): TuiPluginModule {
-  const resolvedDependencies: SidebarProps["dependencies"] = {
+export function createOpenSpecTaskTui(dependencies: OpenSpecTaskTuiDependencies = {}) {
+  const resolvedDependencies = {
     ...dependencies,
     listGateway: dependencies.listGateway ?? createOpenSpecListGateway(),
-    statusGateway:
-      dependencies.statusGateway ?? createOpenSpecStatusGateway(),
+    statusGateway: dependencies.statusGateway ?? createOpenSpecStatusGateway(),
   };
-
-  const tui: TuiPlugin = async (api) => {
-    createRoot((disposeRoot) => {
-      let disposed = false;
-      const sidebarCleanups = new Set<() => void>();
-      const dispose = (): void => {
-        if (disposed) return;
-        disposed = true;
-        for (const cleanup of sidebarCleanups) cleanup();
-        sidebarCleanups.clear();
-        disposeRoot();
-      };
-
-      const removeLifecycleHandler = api.lifecycle.onDispose(dispose);
-      onCleanup(removeLifecycleHandler);
-
-      api.slots.register({
-        order: SIDEBAR_SLOT_ORDER,
-        slots: {
-          sidebar_content(context, _props) {
-            return (
-              <OpenSpecSidebar
-                api={api}
-                project={resolveProjectContext(api)}
-                theme={context.theme.current}
-                dependencies={resolvedDependencies}
-                registerCleanup={(cleanup) => {
-                  sidebarCleanups.add(cleanup);
-                  return () => sidebarCleanups.delete(cleanup);
-                }}
-              />
-            );
-          },
-        },
-      });
-    });
-  };
-
-  return {
+  return Plugin.define({
     id: TUI_PLUGIN_ID,
-    tui,
-  };
+    setup(context) {
+      const [saved, save] = context.storage.store<Record<string, unknown>>("accordion", { initial: {} });
+      const kv: PreferenceKeyValueStore = {
+        get: <Value,>(key: string, fallback?: Value) => (saved[key] ?? fallback) as Value,
+        set: (key, value) => { void save(draft => { draft[key] = value; })
+          .catch(error => context.ui.toast.show({ variant: "error", message: String(error) })); },
+      };
+      const sidebarCleanups = new Set<() => void>();
+      const release = context.ui.slot({ append: "sidebar.content", render: props => {
+        // Slot input is reactive and render runs once, so switching sessions
+        // must re-resolve the directory and remount the sidebar runtime.
+        const directory = createMemo(() => context.data.session.get(props.sessionID)?.location.directory
+          ?? context.location?.directory ?? context.data.location.default().directory);
+        const theme: SidebarTheme = {
+          text: context.theme.text.base, textMuted: context.theme.text.muted,
+          warning: context.theme.text.feedback.warning.base, success: context.theme.text.feedback.success.base,
+          backgroundMenu: context.theme.background.menu,
+        };
+        return <Show when={directory()} keyed>{(current: string) => {
+          const api: SidebarRuntimeApi = { state: { path: { directory: current, worktree: current } }, kv };
+          return <OpenSpecSidebar api={api} project={resolveProjectContext(api)} theme={theme}
+            dependencies={resolvedDependencies} registerCleanup={cleanup => {
+              sidebarCleanups.add(cleanup); return () => { sidebarCleanups.delete(cleanup); };
+            }} />;
+        }}</Show>;
+      } });
+      return () => { release(); for (const cleanup of sidebarCleanups) cleanup(); sidebarCleanups.clear(); };
+    },
+  });
 }
 
 export function createSidebarRuntime(input: {
-  readonly api: TuiPluginApi;
+  readonly api: SidebarRuntimeApi;
   readonly project?: ProjectContext;
   readonly dependencies?: OpenSpecTaskTuiDependencies;
 }): SidebarRuntime {
@@ -663,7 +656,7 @@ function TaskRow(props: TaskRowProps) {
   );
 }
 
-function EmptyState(props: { readonly theme: TuiThemeCurrent }) {
+function EmptyState(props: { readonly theme: SidebarTheme }) {
   return (
     <CompactText fg={props.theme.textMuted} opacity={0.7}>
       No active OpenSpec change
@@ -673,7 +666,7 @@ function EmptyState(props: { readonly theme: TuiThemeCurrent }) {
 
 function CompactText(props: {
   readonly children: string;
-  readonly fg: TuiThemeCurrent["text"];
+  readonly fg: SidebarTheme["text"];
   readonly opacity?: number;
 }) {
   return (
